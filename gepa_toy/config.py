@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 # Anchored to this file so scripts work from any working directory.
@@ -9,7 +10,8 @@ TAG_SPELLING_MAP = DATA_DIR / "tag_spelling_map.tsv"
 TAG_GROUPS = DATA_DIR / "tag_groups.tsv"
 LABELS_JSON = DATA_DIR / "labels.json"
 SPLITS_DIR = DATA_DIR / "splits"
-LABELS_JSON = DATA_DIR / "labels.json"
+
+LABELS = json.loads(LABELS_JSON.read_text())
 
 # Chosen in docs/dataset_preparation.md; lower values chain clusters together.
 DUPLICATE_CUTOFF = 0.45

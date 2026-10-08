@@ -1,6 +1,7 @@
 import unittest
 
-from gepa_toy.zero_shot import LABELS, build_prompt
+from gepa_toy.config import LABELS
+from gepa_toy.zero_shot import build_prompt
 
 
 class BuildPromptTest(unittest.TestCase):

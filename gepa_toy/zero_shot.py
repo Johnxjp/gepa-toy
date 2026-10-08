@@ -1,8 +1,4 @@
-import json
-
-from gepa_toy import config
-
-LABELS = json.loads(config.LABELS_JSON.read_text())
+from gepa_toy.config import LABELS
 
 
 def _options(values):
