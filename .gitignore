@@ -10,4 +10,8 @@ wheels/
 .venv
 
 # Downloaded data
-data/
+data/*
+!data/customer_support_tickets/
+data/customer_support_tickets/*
+!data/customer_support_tickets/tag_groups.tsv
+!data/customer_support_tickets/tag_spelling_map.tsv
