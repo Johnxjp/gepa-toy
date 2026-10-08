@@ -13,12 +13,15 @@ Given a support ticket's subject and body, an LLM predicts which queue it belong
 [Tobi-Bueck/customer-support-tickets](https://huggingface.co/datasets/Tobi-Bueck/customer-support-tickets) on Hugging Face. Synthetic, about 62k tickets, English and German, labelled with queue, priority, type and tags. Licence CC BY-NC 4.0, fine for personal learning.
 
 - English only.
-- Pick 6–8 queues, including the overlapping ones (Technical Support, IT Support, Product Support). Roughly balanced.
-- About 300 tickets, split once with a fixed seed and saved to disk:
+- All 10 queues, including the overlapping ones (Technical Support, IT Support, Product Support). Roughly balanced.
+- 500 tickets, balanced across queues, split once with a fixed seed and saved to disk:
   - **train (100):** minibatches that produce feedback for reflection
   - **pareto (50):** used to accept candidates and maintain the frontier
-  - **test (100):** touched only for final numbers
-- Before starting, read 20 tickets per queue. Expect some labels to be arbitrary. Note the ceiling you think is achievable.
+  - **test (300):** touched only for final numbers
+  - **label (50):** hand-label these blind to estimate the achievable ceiling
+- Expect some labels to be arbitrary: 6% of reworded ticket pairs disagree on queue.
+
+See [docs/dataset_preparation.md](docs/dataset_preparation.md) for how the data is cleaned and split.
 
 ## Metric
 
