@@ -10,14 +10,15 @@ How we turn the raw ticket CSV into the data GEPA runs on, and why each step wor
 | `data/customer_support_tickets/english.tsv` | English tickets with cleaned `tags` and `tag_groups` columns (generated) |
 | `data/customer_support_tickets/tag_spelling_map.tsv` | Every tag spelling that was merged, for tracing (generated) |
 | `data/customer_support_tickets/tag_groups.tsv` | Hand-reviewed mapping from the top 200 tags to 20 groups (edit by hand) |
+| `data/customer_support_tickets/labels.json` | Final label values for the annotation UI: queues, types, priorities, and the 20 tag groups as `tags` (generated) |
 | `data/customer_support_tickets/splits/{train,pareto,test}.tsv` | The GEPA splits, with an `id` column pointing back to the row in `english.tsv` (generated) |
 | `data/customer_support_tickets/splits/label_sheet.tsv` | 50 tickets to hand-label, queue hidden, fill in `my_queue` (generated) |
 | `data/customer_support_tickets/splits/label_key.tsv` | The same 50 tickets with their real labels (generated) |
 
-Rerun from the project root:
+Rerun with `uv run` (paths come from `gepa_toy/config.py`, so any working directory works):
 
 ```sh
-python3 scripts/prepare_data.py      # writes english.tsv and tag_spelling_map.tsv, prints label breakdowns
+uv run scripts/prepare_data.py       # writes english.tsv, tag_spelling_map.tsv and labels.json, prints label breakdowns
 uv run scripts/near_duplicates.py    # prints near-duplicate counts and sample pairs per similarity band
 uv run scripts/split_data.py         # writes the splits and checks no test ticket has a near duplicate elsewhere
 ```
