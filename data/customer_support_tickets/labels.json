@@ -1,0 +1,47 @@
+{
+  "queue": [
+    "Billing and Payments",
+    "Customer Service",
+    "General Inquiry",
+    "Human Resources",
+    "IT Support",
+    "Product Support",
+    "Returns and Exchanges",
+    "Sales and Pre-Sales",
+    "Service Outages and Maintenance",
+    "Technical Support"
+  ],
+  "type": [
+    "Change",
+    "Incident",
+    "Problem",
+    "Request"
+  ],
+  "priority": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "tags": [
+    "Account & Access",
+    "Billing & Returns",
+    "Bugs & Errors",
+    "Business Strategy",
+    "Data & Analytics",
+    "Documentation & Training",
+    "Feedback & Feature Requests",
+    "General Support",
+    "HR",
+    "Hardware & Infrastructure",
+    "Healthcare",
+    "Integration",
+    "Marketing & Brand",
+    "Operations",
+    "Outages & Recovery",
+    "Performance",
+    "Privacy & Compliance",
+    "Sales",
+    "Security",
+    "Software & Updates"
+  ]
+}
