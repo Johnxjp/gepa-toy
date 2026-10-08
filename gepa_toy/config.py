@@ -9,6 +9,7 @@ TAG_SPELLING_MAP = DATA_DIR / "tag_spelling_map.tsv"
 TAG_GROUPS = DATA_DIR / "tag_groups.tsv"
 LABELS_JSON = DATA_DIR / "labels.json"
 SPLITS_DIR = DATA_DIR / "splits"
+LABELS_JSON = DATA_DIR / "labels.json"
 
 # Chosen in docs/dataset_preparation.md; lower values chain clusters together.
 DUPLICATE_CUTOFF = 0.45
