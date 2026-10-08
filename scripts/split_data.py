@@ -1,39 +1,27 @@
 """Sample balanced, leak-free train/pareto/test splits plus a hand-labelling set."""
 
-import csv
 import random
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
-from near_duplicates import (
-    DATA,
+
+from gepa_toy.config import DUPLICATE_CUTOFF, ENGLISH_TSV, SPLITS_DIR
+from gepa_toy.data_processing.near_duplicates import (
+    closest_match,
     cluster_labels,
-    load_texts,
     similar_pairs,
     tfidf_matrix,
 )
+from gepa_toy.data_processing.tickets import ticket_text
+from gepa_toy.data_processing.tsv import read_tsv, write_tsv
 
-OUT_DIR = Path("data/customer_support_tickets/splits")
-# Chosen in docs/dataset_preparation.md; lower values chain clusters together.
-DUPLICATE_CUTOFF = 0.45
 SEED = 0
 PER_QUEUE = {"train": 10, "pareto": 5, "test": 30, "label": 5}
 
 
-def write_tsv(path: Path, rows: list[dict], fields: list[str]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=fields, delimiter="\t", extrasaction="ignore"
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def main() -> None:
-    with DATA.open(newline="", encoding="utf-8") as f:
-        rows = [{"id": i, **r} for i, r in enumerate(csv.DictReader(f, delimiter="\t"))]
-    matrix = tfidf_matrix(load_texts())
+    rows = [{"id": i, **r} for i, r in enumerate(read_tsv(ENGLISH_TSV))]
+    matrix = tfidf_matrix([ticket_text(r) for r in rows])
     left, right, _ = similar_pairs(matrix, DUPLICATE_CUTOFF)
     clusters = cluster_labels(left, right, len(rows))
 
@@ -56,15 +44,15 @@ def main() -> None:
             splits[split] += candidates[start : start + count]
             start += count
 
-    OUT_DIR.mkdir(exist_ok=True)
-    fields = ["id"] + [k for k in rows[0] if k != "id"]
+    SPLITS_DIR.mkdir(exist_ok=True)
+    fields = list(rows[0])
     for split in ["train", "pareto", "test"]:
-        write_tsv(OUT_DIR / f"{split}.tsv", splits[split], fields)
+        write_tsv(SPLITS_DIR / f"{split}.tsv", splits[split], fields)
     # The labelling sheet hides the real queue, and is shuffled because rows arrive grouped by queue.
     rng.shuffle(splits["label"])
-    write_tsv(OUT_DIR / "label_key.tsv", splits["label"], fields)
+    write_tsv(SPLITS_DIR / "label_key.tsv", splits["label"], fields)
     write_tsv(
-        OUT_DIR / "label_sheet.tsv",
+        SPLITS_DIR / "label_sheet.tsv",
         splits["label"],
         ["id", "subject", "body", "my_queue"],
     )
@@ -73,7 +61,7 @@ def main() -> None:
     assert len(sampled) == len(set(sampled)), "a ticket landed in two splits"
     test_ids = [r["id"] for r in splits["test"]]
     other_ids = [i for i in sampled if i not in set(test_ids)]
-    closest = (matrix[test_ids] @ matrix[other_ids].T).toarray().max(axis=1)
+    closest = closest_match(matrix, test_ids, other_ids)
     for split, members in splits.items():
         print(f"{split}: {len(members)} tickets")
     print(

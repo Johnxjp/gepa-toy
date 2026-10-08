@@ -1,16 +1,21 @@
 """Filter the support tickets to English, clean up tags, and print label breakdowns."""
 
 import csv
+import json
 import re
 from collections import Counter, defaultdict
-from pathlib import Path
 
-DATA_DIR = Path("data/customer_support_tickets")
-SOURCE = DATA_DIR / "data.csv"
-OUTPUT = DATA_DIR / "english.tsv"
-SPELLING_MAP = DATA_DIR / "tag_spelling_map.tsv"
-TAG_GROUPS = DATA_DIR / "tag_groups.tsv"
+from gepa_toy.config import (
+    ENGLISH_TSV,
+    LABELS_JSON,
+    RAW_CSV,
+    TAG_GROUPS,
+    TAG_SPELLING_MAP,
+)
+from gepa_toy.data_processing.tsv import read_tsv, write_tsv
+
 TAG_COLUMNS = [f"tag_{i}" for i in range(1, 9)]
+PRIORITY_ORDER = ["low", "medium", "high"]
 FIELDS = [
     "subject",
     "body",
@@ -63,10 +68,9 @@ def print_breakdown(name: str, counter: Counter, total: int) -> None:
 
 
 def main() -> None:
-    with SOURCE.open(newline="", encoding="utf-8") as f:
+    with RAW_CSV.open(newline="", encoding="utf-8") as f:
         rows = [r for r in csv.DictReader(f) if r["language"] == "en"]
-    with TAG_GROUPS.open(newline="", encoding="utf-8") as f:
-        groups = {r["tag"]: r["group"] for r in csv.DictReader(f, delimiter="\t")}
+    groups = {r["tag"]: r["group"] for r in read_tsv(TAG_GROUPS)}
 
     raw_tags = [merge_tags(r) for r in rows]
     raw_counts = Counter(t for tags in raw_tags for t in tags)
@@ -76,25 +80,30 @@ def main() -> None:
         dedupe([groups[t] for t in tags if t in groups]) for tags in clean_tags
     ]
 
-    with SPELLING_MAP.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter="\t")
-        writer.writerow(["variant", "canonical", "count"])
-        for variant, canonical in sorted(spelling.items(), key=lambda kv: kv[1]):
-            if variant != canonical:
-                writer.writerow([variant, canonical, raw_counts[variant]])
-
-    with OUTPUT.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=FIELDS, delimiter="\t", extrasaction="ignore"
-        )
-        writer.writeheader()
-        for row, tags, grouped in zip(rows, clean_tags, tag_groups):
-            writer.writerow(
-                {**row, "tags": ",".join(tags), "tag_groups": ",".join(grouped)}
-            )
+    merged = [
+        {"variant": variant, "canonical": canonical, "count": raw_counts[variant]}
+        for variant, canonical in sorted(spelling.items(), key=lambda kv: kv[1])
+        if variant != canonical
+    ]
+    write_tsv(TAG_SPELLING_MAP, merged, ["variant", "canonical", "count"])
+    write_tsv(
+        ENGLISH_TSV,
+        [
+            {**row, "tags": ",".join(tags), "tag_groups": ",".join(grouped)}
+            for row, tags, grouped in zip(rows, clean_tags, tag_groups)
+        ],
+        FIELDS,
+    )
+    labels = {
+        "queue": sorted({r["queue"] for r in rows}),
+        "type": sorted({r["type"] for r in rows}),
+        "priority": sorted({r["priority"] for r in rows}, key=PRIORITY_ORDER.index),
+        "tags": sorted(set(groups.values())),
+    }
+    LABELS_JSON.write_text(json.dumps(labels, indent=2) + "\n", encoding="utf-8")
 
     total = len(rows)
-    print(f"Wrote {total} English rows to {OUTPUT}")
+    print(f"Wrote {total} English rows to {ENGLISH_TSV}")
     for column in ["type", "queue", "priority"]:
         print_breakdown(column, Counter(r[column] for r in rows), total)
     # Tag percentages are share of tickets carrying the tag, so they sum past 100%.
