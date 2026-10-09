@@ -12,7 +12,9 @@ from gepa_toy.zero_shot import build_prompt
 def main() -> None:
     defaults = ModelConfig()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--split", default="train", choices=["train", "pareto", "test"])
+    parser.add_argument(
+        "--split", default="train", choices=["train", "pareto", "test", "label_key"]
+    )
     parser.add_argument("--model", default=defaults.model)
     parser.add_argument("--temperature", type=float, default=defaults.temperature)
     parser.add_argument("--max-tokens", type=int, default=defaults.max_tokens)
