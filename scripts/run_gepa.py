@@ -39,11 +39,12 @@ def main() -> None:
     parser.add_argument("--stage", required=True, choices=["0", *STAGES])
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--budget", type=int, default=1000)
+    parser.add_argument("--model", default=ModelConfig().model)
     parser.add_argument("--reflection-model", default=config.REFLECTION_MODEL)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
 
-    task_config = ModelConfig()
+    task_config = ModelConfig(model=args.model)
     cache = Cache(CACHE_PATH)
     best_text, best_id, log_path = SEED_INSTRUCTION, None, None
     if args.stage != "0":

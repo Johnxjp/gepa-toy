@@ -303,7 +303,7 @@ Every phase uses the same task model, reflection model, splits and budget: 1,000
 
 | Phase | What | Feedback | Parent selection | Reflection prompt | Run with |
 | --- | --- | --- | --- | --- | --- |
-| 0 | Seed instruction, no optimisation | none | none | none | `scripts/evaluate.py` on test |
+| 0 | Seed instruction, no optimisation | none | none | none | `scripts/run_gepa.py --stage 0` |
 | 1 | Our GEPA, keep single best, bare score | score | best | ours | `scripts/run_gepa.py --stage 1` |
 | 2 | Stage 1 with written feedback | written | best | ours | `scripts/run_gepa.py --stage 2` |
 | 3 | Stage 2 with the Pareto pool | written | pareto | ours | `scripts/run_gepa.py --stage 3` |
@@ -382,6 +382,8 @@ Tests use fakes and never call a model, apart from the smoke run.
 
 ## 8. Open questions
 
+- **Resolved: reflection model.** `deepseek/deepseek-v4.1-flash` with reasoning off and 4,000 output tokens. With reasoning on it spends its whole token budget thinking and returns no content, even at 16,000 tokens.
+- **Free-tier daily cap.** OpenRouter allows 1,000 calls per day on free models for this account. One stage run plus its test scoring is 1,300 calls, so the free task model gives at most one run per day and only with the cache carrying the rest. The paid `nvidia/nemotron-3.5-lightning` is the same model at about $0.05 per million input tokens; the whole project would cost under $1 on it. `run_gepa.py --model` and `run_dspy.py` take the model name.
 - **Rate limits.** The account's current per-minute and per-day limits on OpenRouter free models are unknown, and they set `workers` and whether 16,000 calls fit in the time available.
 - **Reasoning flag through LiteLLM.** Whether `reasoning: {enabled: false}` reaches Nemotron when called as `openrouter/<model>` through DSPy. If it doesn't, stage 4 needs a different route to the model or a different model.
 - **Token limit for DSPy's format.** DSPy's output format is longer than our JSON. Whether `max_tokens=300` is enough is checked with one call, and the answer may force a higher limit in stage 4 only, which is itself a difference to record.
@@ -404,6 +406,8 @@ All agreed.
 - DSPy's adapter formats fields with its own markers and parses its own output format, not our strict JSON, so format failures behave differently.
 - DSPy's default minibatch is 3; both sides use 5 (`reflection_minibatch_size=5` set explicitly).
 - `skip_perfect_score=True` is a DSPy default and our loop copies it.
+- DSPy checks `max_metric_calls` only at the start of an iteration, so a stage 4 run can use up to 59 calls past the budget (two minibatches plus a pareto scoring). Our loop never starts an evaluation it can't afford. Report `calls_used` from both logs.
+- DSPy retries a parse failure once through its JSON adapter (an extra, uncounted call) and drops the failed example from the reflection set, so its reflector never sees a "Reply was not valid" line.
 - Dominance rule: our loop drops a candidate only when one other candidate wins every example it wins (section 4.4). The reference `remove_dominated_programs` uses a coverage rule: a candidate is dropped when every example it wins is also won by some other surviving candidate, not necessarily the same one. With A winning {0}, B winning {1} and C winning {0, 1} with the lowest mean, the reference drops C and ours keeps it.
 - The reflector takes the last fenced block; the reference takes everything between the first and last fence.
 
