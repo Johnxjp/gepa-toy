@@ -404,6 +404,8 @@ All agreed.
 - DSPy's adapter formats fields with its own markers and parses its own output format, not our strict JSON, so format failures behave differently.
 - DSPy's default minibatch is 3; both sides use 5 (`reflection_minibatch_size=5` set explicitly).
 - `skip_perfect_score=True` is a DSPy default and our loop copies it.
+- Dominance rule: our loop drops a candidate only when one other candidate wins every example it wins (section 4.4). The reference `remove_dominated_programs` uses a coverage rule: a candidate is dropped when every example it wins is also won by some other surviving candidate, not necessarily the same one. With A winning {0}, B winning {1} and C winning {0, 1} with the lowest mean, the reference drops C and ours keeps it.
+- The reflector takes the last fenced block; the reference takes everything between the first and last fence.
 
 ### Related documents
 
