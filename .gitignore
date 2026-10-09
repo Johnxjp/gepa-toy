@@ -19,3 +19,5 @@ data/customer_support_tickets/*
 
 # Secrets
 .env
+# Evaluation runs
+results/

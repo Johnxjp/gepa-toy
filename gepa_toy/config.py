@@ -10,6 +10,7 @@ TAG_SPELLING_MAP = DATA_DIR / "tag_spelling_map.tsv"
 TAG_GROUPS = DATA_DIR / "tag_groups.tsv"
 LABELS_JSON = DATA_DIR / "labels.json"
 SPLITS_DIR = DATA_DIR / "splits"
+RESULTS_DIR = PROJECT_ROOT / "results"
 
 LABELS = json.loads(LABELS_JSON.read_text())
 
