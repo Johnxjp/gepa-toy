@@ -27,6 +27,11 @@ TRANSIENT_ERRORS = (
 
 
 def labels_of(row: dict[str, str]) -> dict:
+    """True labels for a split row, in the same shape as a `Prediction`.
+
+    Tags come from `tag_groups`, the grouped tags the model chooses from, not the
+    raw `tags` column. The TSV stores them comma-separated.
+    """
     return {
         **{field: row[field] for field in SINGLE_FIELDS},
         "tags": row["tag_groups"].split(","),
@@ -97,6 +102,13 @@ def field_scores(predictions: list[dict], field: str) -> dict:
 
 
 def summarise(predictions: list[dict]) -> dict:
+    """Aggregate scores for a run, for reporting and comparing prompts.
+
+    Queue, type and priority get accuracy plus macro precision, recall and F1.
+    Tags get set precision, recall and F1, averaged per ticket. `gepa_score` is
+    the mean of the per-ticket scores, which GEPA uses to pick the final prompt.
+    Failed predictions count as wrong on every field.
+    """
     n = len(predictions)
     tags = [
         tag_scores(
