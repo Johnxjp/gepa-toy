@@ -48,8 +48,10 @@ def main() -> None:
     best_text, best_id, log_path = SEED_INSTRUCTION, None, None
     if args.stage != "0":
         stage = STAGES[args.stage]
+        # Reasoning off: with it on, DeepSeek spends its whole token budget thinking and
+        # returns no content (even at 16k tokens).
         reflection_config = ModelConfig(
-            model=args.reflection_model, reasoning=True, max_tokens=4000, timeout=120
+            model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=120
         )
         task = TicketTask(task_config, stage["feedback"], cache, args.workers)
         propose = make_reflector(
@@ -74,14 +76,13 @@ def main() -> None:
             propose,
             settings,
             log_path,
+            metadata={
+                "stage": args.stage,
+                "seed": args.seed,
+                "reflection_model": reflection_config.model_dump(),
+                "reflection_prompt": stage["reflection_prompt"],
+            },
         )
-        log["metadata"].update(
-            stage=args.stage,
-            seed=args.seed,
-            reflection_model=reflection_config.model_dump(),
-            reflection_prompt=stage["reflection_prompt"],
-        )
-        log_path.write_text(json.dumps(log, indent=2))
         best_id = log["best"]
         best_text = log["candidates"][best_id]["text"]
 

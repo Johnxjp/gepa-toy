@@ -16,11 +16,15 @@ summarise_runs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(summarise_runs)
 
 
-def run(stage, accuracy, score):
+def run(stage, accuracy, score, errors=0):
     metadata = {} if stage is None else {"stage": stage}
     return {
         "metadata": metadata,
-        "results": {"gepa_score": score, "queue": {"accuracy": accuracy}},
+        "results": {
+            "gepa_score": score,
+            "queue": {"accuracy": accuracy},
+            "errors": errors,
+        },
     }
 
 
@@ -29,7 +33,7 @@ class SummariseRunsTest(unittest.TestCase):
         runs = [
             run("3", 0.5, 0.6),
             run("3c", 0.4, 0.5),
-            run("3", 0.7, 0.9),
+            run("3", 0.7, 0.9, errors=3),
             run("0", 0.2, 0.3),
             run(4, 0.8, 0.85),
             run("3", 0.6, 0.6),
@@ -42,6 +46,7 @@ class SummariseRunsTest(unittest.TestCase):
         self.assertAlmostEqual(stage3["queue_accuracy_sd"], stdev([0.5, 0.7, 0.6]))
         self.assertAlmostEqual(stage3["gepa_score"], 0.7)
         self.assertAlmostEqual(stage3["gepa_score_sd"], stdev([0.6, 0.9, 0.6]))
+        self.assertAlmostEqual(stage3["errors"], 1.0)
 
     def test_single_run_has_stdev_0(self):
         (row,) = summarise_runs.summarise_runs([run("1", 0.5, 0.6)])

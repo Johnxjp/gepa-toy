@@ -48,7 +48,7 @@ IMPROVED = "Improved instruction"
 
 def fake_complete(prompt, model_config):
     """Reflection calls propose IMPROVED; the task model is right only under it."""
-    if model_config.reasoning:
+    if model_config.max_tokens == 4000:
         return f"Here you go:\n```\n{IMPROVED}\n```"
     return RIGHT if IMPROVED in prompt else WRONG
 
@@ -167,7 +167,7 @@ class MainTest(unittest.TestCase):
                 "model": config.REFLECTION_MODEL,
                 "temperature": 0.0,
                 "max_tokens": 4000,
-                "reasoning": True,
+                "reasoning": False,
                 "timeout": 120.0,
             },
         )
@@ -181,7 +181,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(run["results"]["queue"]["accuracy"], 1.0)
         self.assertEqual(run["results"]["n"], 2)
         reflection_calls = [
-            c for c in self.complete.call_args_list if c.args[1].reasoning
+            c for c in self.complete.call_args_list if c.args[1].max_tokens == 4000
         ]
         self.assertEqual(len(reflection_calls), 1)
         self.assertEqual(reflection_calls[0].args[1].model, config.REFLECTION_MODEL)
@@ -217,7 +217,7 @@ class MainTest(unittest.TestCase):
             {
                 c.args[1].model
                 for c in self.complete.call_args_list
-                if c.args[1].reasoning
+                if c.args[1].max_tokens == 4000
             },
             {"x/y"},
         )
@@ -236,7 +236,9 @@ class MainTest(unittest.TestCase):
         )
         self.assertEqual(run["results"]["queue"]["accuracy"], 0.0)
         self.assertFalse(self.gepa_results.exists())
-        self.assertFalse(any(c.args[1].reasoning for c in self.complete.call_args_list))
+        self.assertFalse(
+            any(c.args[1].max_tokens == 4000 for c in self.complete.call_args_list)
+        )
 
     def test_test_split_goes_through_the_cache(self):
         self.run_main("--stage", "0", "--seed", "0")
@@ -253,7 +255,7 @@ class MainTest(unittest.TestCase):
             self.run_main("--stage", "3", "--seed", "0", "--budget", "14")
             for path in self.results.glob("*.json"):
                 path.unlink()
-        calls = [c.args[1].reasoning for c in self.complete.call_args_list]
+        calls = [c.args[1].max_tokens == 4000 for c in self.complete.call_args_list]
         self.assertEqual(calls, [True])
 
     def test_same_second_runs_get_different_logs(self):

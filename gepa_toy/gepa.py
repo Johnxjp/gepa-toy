@@ -50,6 +50,7 @@ def optimise(
     propose: Propose,
     settings: Settings,
     log_path: Path,
+    metadata: dict | None = None,
 ) -> dict:
     # An empty train would loop forever in shuffled_positions, an empty pareto has no mean,
     # and a budget below len(pareto) cannot even score the seed.
@@ -77,6 +78,8 @@ def optimise(
             "pareto_size": len(pareto),
             "started": datetime.now(UTC).isoformat(),
             "runtime_seconds": 0.0,
+            # Caller's stage and seed go in from the first write, so a crashed run is still labelled.
+            **(metadata or {}),
         },
         "candidates": candidates,
         "iterations": [],

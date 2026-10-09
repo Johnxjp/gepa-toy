@@ -1,4 +1,8 @@
-"""Per stage: n, mean and sample standard deviation of queue accuracy and gepa_score."""
+"""Per stage: n, mean and sample standard deviation of queue accuracy and gepa_score.
+
+Errors is the mean number of failed predictions per test run: a run with many is a
+rate-limit casualty, not a result (design section 4.5).
+"""
 
 import json
 from statistics import mean, stdev
@@ -20,6 +24,7 @@ def summarise_runs(runs: list[dict]) -> list[dict]:
     for stage in sorted(by_stage, key=STAGE_ORDER.index):
         accuracy = [r["results"]["queue"]["accuracy"] for r in by_stage[stage]]
         score = [r["results"]["gepa_score"] for r in by_stage[stage]]
+        errors = [r["results"]["errors"] for r in by_stage[stage]]
         rows.append(
             {
                 "stage": stage,
@@ -28,6 +33,7 @@ def summarise_runs(runs: list[dict]) -> list[dict]:
                 "queue_accuracy_sd": spread(accuracy),
                 "gepa_score": mean(score),
                 "gepa_score_sd": spread(score),
+                "errors": mean(errors),
             }
         )
     return rows
@@ -36,12 +42,15 @@ def summarise_runs(runs: list[dict]) -> list[dict]:
 def main() -> None:
     runs = [json.loads(p.read_text()) for p in sorted(RESULTS_DIR.glob("*.json"))]
     rows = summarise_runs([r for r in runs if "stage" in r["metadata"]])
-    print(f"{'stage':<6}{'n':>3}{'queue acc':>12}{'sd':>8}{'gepa_score':>12}{'sd':>8}")
+    print(
+        f"{'stage':<6}{'n':>3}{'queue acc':>12}{'sd':>8}{'gepa_score':>12}{'sd':>8}"
+        f"{'errors':>8}"
+    )
     for r in rows:
         print(
             f"{r['stage']:<6}{r['n']:>3}{r['queue_accuracy']:>12.3f}"
             f"{r['queue_accuracy_sd']:>8.3f}{r['gepa_score']:>12.3f}"
-            f"{r['gepa_score_sd']:>8.3f}"
+            f"{r['gepa_score_sd']:>8.3f}{r['errors']:>8.1f}"
         )
 
 
