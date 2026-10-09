@@ -656,13 +656,19 @@ class ParetoSelectionTest(unittest.TestCase):
         self.assertEqual(set(counts), {0, 1})
         self.assertAlmostEqual(counts[1] / 3000, 1 / 4, delta=0.05)
 
-    def test_dominance_needs_one_candidate_with_a_superset_win_set(self):
-        # Design 4.4: dominated means another single candidate wins everything this one
-        # wins. Candidate 2 has the lowest mean and its wins are covered only by 0 and 1
-        # together, so it stays. (The reference implementation would drop it.)
-        candidates = candidates_from([[1, 0, 0.9], [0, 1, 0.9], [1, 1, 0]])
+    def test_wins_covered_by_several_candidates_together_are_dominated(self):
+        # Candidate 2 has the lowest mean and no single candidate covers its wins {0, 1},
+        # but 0 and 1 together do, so the reference rule drops it.
+        candidates = candidates_from([[1, 0, 1, 0.2], [0, 1, 0.2, 1], [1, 1, 0, 0]])
         self.assertEqual(candidates[2]["pareto_wins"], [0, 1])
-        self.assertEqual([c["id"] for c in pareto_front(candidates)], [0, 1, 2])
+        self.assertEqual([c["id"] for c in pareto_front(candidates)], [0, 1])
+
+    def test_a_dropped_candidate_no_longer_covers_later_ones(self):
+        # Ascending by mean: 0 is dropped first (covered by 1 and 2), after which 1 is the
+        # only winner of example 0 left and must stay. Dropping both would leave
+        # example 0 with no winner in the front.
+        candidates = candidates_from([[1, 0.5, 0], [1, 0, 1], [0, 1, 1]])
+        self.assertEqual([c["id"] for c in pareto_front(candidates)], [1, 2])
 
     def test_dominated_candidate_with_highest_mean_is_still_the_final_pick(self):
         candidates = candidates_from([[1, 0.9, 0.9], [1, 1, 0], [0, 0, 1]])

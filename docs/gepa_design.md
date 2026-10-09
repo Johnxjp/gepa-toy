@@ -215,7 +215,7 @@ while budget left >= 2 * minibatch_size:
 return candidate with the highest mean pareto score   ties: earliest
 ```
 
-**Pareto selection.** For each pareto example, the winners are every candidate with the top score on it (ties all win). Candidates that win nothing are out. Then drop dominated candidates: a candidate is dominated when another candidate still in the running wins every example it wins. Check candidates from lowest mean pareto score upwards, so of two with the same win set the weaker one goes. A surviving candidate's weight is the number of examples it wins. Sample a parent in proportion to weight with the seeded RNG. Dropping affects parent selection only: dominated candidates stay in the log and in the final pick, which is over all candidates. This follows the reference implementation's `remove_dominated_programs`.
+**Pareto selection.** For each pareto example, the winners are every candidate with the top score on it (ties all win). Candidates that win nothing are out. Then drop dominated candidates: a candidate is dominated when every example it wins is also won by some other candidate still in the running, not necessarily the same one. Check candidates from lowest mean pareto score upwards, so of two with the same win set the weaker one goes, and once a candidate is dropped it no longer covers anyone else's wins. A surviving candidate's weight is the number of examples it wins. Sample a parent in proportion to weight with the seeded RNG. Dropping affects parent selection only: dominated candidates stay in the log and in the final pick, which is over all candidates. This is the reference implementation's `remove_dominated_programs`, which stage 4 runs. The paper (Algorithm 2) says only that "strictly dominated" candidates are pruned and does not define dominated, so the reference code is the definition we match. On 5,000 random score matrices our function and the reference drop the same candidates whenever all means differ; they can differ only on exactly tied means, where the reference's order is the order candidates first appear in its win lists and ours drops the earlier candidate.
 
 **Greedy selection** (stages 1 and 2). The parent is always the candidate with the highest mean pareto score. Accepted children are still scored on pareto, so the final pick works the same way in every stage.
 
@@ -357,7 +357,7 @@ Tests use fakes and never call a model, apart from the smoke run.
 | Budget | With a fake task, total examples evaluated never exceeds the budget, for budgets that land mid-iteration and mid-pareto-scoring. Cache hits are counted. The seed's pareto scoring is counted. |
 | Acceptance | Child equal to parent on the minibatch is rejected. A rejected child is never scored on pareto and never enters the pool. |
 | Pareto selection | Hand-written score matrix: winners per example include ties, weights equal win counts, a candidate that wins nothing is never picked, sampling frequencies over many draws match weights. |
-| Dominated candidates | A candidate whose win set is a subset of another's is never picked. Two candidates with the same win set: only the one with the higher mean can be picked. A candidate that wins one example nobody else wins survives whatever its mean. A dominated candidate with the highest mean is still the final pick. |
+| Dominated candidates | A candidate whose win set is a subset of another's is never picked. A candidate whose wins are covered by two others together is never picked. A dropped candidate no longer covers later ones. Two candidates with the same win set: only the one with the higher mean can be picked. A candidate that wins one example nobody else wins survives whatever its mean. A dominated candidate with the highest mean is still the final pick. |
 | Greedy selection | Always picks the top mean; never picks anything else. |
 | Final pick | Highest mean pareto score; earliest on a tie. |
 | Skip perfect | Parent scoring 1 on every minibatch example: no reflection call, iteration logged as skipped. |
@@ -408,8 +408,20 @@ All agreed.
 - `skip_perfect_score=True` is a DSPy default and our loop copies it.
 - DSPy checks `max_metric_calls` only at the start of an iteration, so a stage 4 run can use up to 59 calls past the budget (two minibatches plus a pareto scoring). Our loop never starts an evaluation it can't afford. Report `calls_used` from both logs.
 - DSPy retries a parse failure once through its JSON adapter (an extra, uncounted call) and drops the failed example from the reflection set, so its reflector never sees a "Reply was not valid" line.
-- Dominance rule: our loop drops a candidate only when one other candidate wins every example it wins (section 4.4). The reference `remove_dominated_programs` uses a coverage rule: a candidate is dropped when every example it wins is also won by some other surviving candidate, not necessarily the same one. With A winning {0}, B winning {1} and C winning {0, 1} with the lowest mean, the reference drops C and ours keeps it.
+- Dominance ties: both loops use the reference coverage rule (section 4.4), but on exactly equal mean pareto scores the order of checking differs, so a different one of the tied candidates may be dropped.
 - The reflector takes the last fenced block; the reference takes everything between the first and last fence.
+
+### Known differences from the paper, for the write-up
+
+Checked against [Agrawal et al., 2025](references/gepa.pdf), Algorithms 1 and 2 and Appendix C. The loop matches on pool initialisation, per-example winners, sampling weights, rescoring the parent on each minibatch, what the reflector sees, acceptance, scoring an accepted child on the full pareto set, budget counting and the final pick.
+
+- Reflection prompt: ours asks for general rules ("they must hold for tickets that are not in the examples"). The paper's prompt (Appendix C) asks for the opposite: "all niche and domain specific factual information". Stage 3c runs the paper's prompt word for word.
+- The paper never tests its reflection prompt: it is fixed text with no ablation of its wording, justified only by the end-to-end results. The paper's only ablations are parent selection (Table 3) and merge.
+- Dominance: the paper prunes "strictly dominated" candidates without defining the term. We follow the reference code's coverage rule, which also drops a candidate whose win set equals another's.
+- Minibatch size: the paper uses 3 (Appendix E.4), we use 5.
+- Skip perfect: the paper has no skip; we copy DSPy's `skip_perfect_score`.
+- Budget end: the paper never discards an accepted child. We drop one when the budget can't pay for its pareto scoring, and stop when fewer than two minibatches of calls remain.
+- Minibatches: the paper samples "stochastically"; we shuffle per epoch, as the reference code does.
 
 ### Related documents
 

@@ -190,16 +190,18 @@ def select_parent(
 def pareto_front(candidates: list[dict]) -> list[dict]:
     """Candidates that win at least one pareto example, minus the dominated ones.
 
-    A candidate is dominated when another one still in the running wins every example
-    it wins. Checked from the lowest mean upwards, so of two with the same win set the
-    weaker goes (the earlier one on equal means); dropping only shrinks the set of
-    possible dominators, so one pass is enough. A candidate that wins an example nobody
-    else wins can never be dropped.
+    A candidate is dominated when every example it wins is also won by some other
+    candidate still in the running, not necessarily the same one. This is the reference
+    implementation's `remove_dominated_programs` (gepa-ai/gepa, gepa_utils.py), which
+    stage 4 runs. Checked from the lowest mean upwards, so of two with the same win set
+    the weaker goes (the earlier one on equal means). The reference rescans after each
+    drop; dropping only shrinks the cover for later checks, so one pass gives the same
+    result. A candidate that wins an example nobody else wins can never be dropped.
     """
     front = [c for c in candidates if c["pareto_wins"]]
     for c in sorted(front, key=lambda c: c["mean_pareto_score"]):
-        wins = set(c["pareto_wins"])
-        if any(o is not c and wins <= set(o["pareto_wins"]) for o in front):
+        covered = {j for o in front if o is not c for j in o["pareto_wins"]}
+        if set(c["pareto_wins"]) <= covered:
             front.remove(c)
     return front
 
