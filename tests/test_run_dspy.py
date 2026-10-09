@@ -108,6 +108,7 @@ class MainTest(unittest.TestCase):
                 "seed",
                 "log_path",
                 "best_candidate",
+                "budget",
             },
         )
         self.assertEqual((meta["stage"], meta["seed"]), ("4", 2))
@@ -172,7 +173,7 @@ class MainTest(unittest.TestCase):
             models,
             [
                 ("paid/model", 500, True),
-                ("x/y", 4000, False),
+                ("x/y", 4000, True),
                 ("paid/model", 500, False),
             ],
         )

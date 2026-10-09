@@ -183,7 +183,8 @@ class MainTest(unittest.TestCase):
         reflection_calls = [
             c for c in self.complete.call_args_list if c.args[1].max_tokens == 4000
         ]
-        self.assertEqual(len(reflection_calls), 1)
+        # The probe call before the loop plus one proposal.
+        self.assertEqual(len(reflection_calls), 2)
         self.assertEqual(reflection_calls[0].args[1].model, config.REFLECTION_MODEL)
         self.assertIn(str(log_path.relative_to(self.root)), self.stdout)
 
@@ -256,7 +257,7 @@ class MainTest(unittest.TestCase):
             for path in self.results.glob("*.json"):
                 path.unlink()
         calls = [c.args[1].max_tokens == 4000 for c in self.complete.call_args_list]
-        self.assertEqual(calls, [True])
+        self.assertEqual(calls, [True, True])
 
     def test_same_second_runs_get_different_logs(self):
         for _ in range(2):

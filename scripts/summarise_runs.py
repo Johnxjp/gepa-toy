@@ -1,10 +1,12 @@
 """Per stage: n, mean and sample standard deviation of queue accuracy and gepa_score.
 
-Errors is the mean number of failed predictions per test run: a run with many is a
-rate-limit casualty, not a result (design section 4.5).
+Only test-split runs count. Errors is the mean number of failed predictions (API errors
+and unparseable replies) per run; a run with many is a casualty, not a result. Smoke
+runs and discarded runs are deleted from results/ by hand (design section 4.5).
 """
 
 import json
+from pathlib import Path
 from statistics import mean, stdev
 
 from gepa_toy.config import RESULTS_DIR
@@ -41,7 +43,14 @@ def summarise_runs(runs: list[dict]) -> list[dict]:
 
 def main() -> None:
     runs = [json.loads(p.read_text()) for p in sorted(RESULTS_DIR.glob("*.json"))]
-    rows = summarise_runs([r for r in runs if "stage" in r["metadata"]])
+    rows = summarise_runs(
+        [
+            r
+            for r in runs
+            if "stage" in r["metadata"]
+            and Path(r["metadata"]["data_file"]).stem == "test"
+        ]
+    )
     print(
         f"{'stage':<6}{'n':>3}{'queue acc':>12}{'sd':>8}{'gepa_score':>12}{'sd':>8}"
         f"{'errors':>8}"

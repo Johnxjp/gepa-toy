@@ -4,6 +4,7 @@ from gepa_toy.gepa import Rollout
 from gepa_toy.reflect import (
     DSPY_REFLECTION_PROMPT,
     REFLECTION_PROMPT,
+    extract_instruction,
     make_reflector,
 )
 
@@ -167,3 +168,9 @@ class RecordingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyBlockTest(unittest.TestCase):
+    def test_empty_fenced_block_raises(self):
+        with self.assertRaises(ValueError):
+            extract_instruction("Here:\n```\n\n```\n")

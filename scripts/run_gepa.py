@@ -55,6 +55,9 @@ def main() -> None:
             model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=120
         )
         task = TicketTask(task_config, stage["feedback"], cache, args.workers)
+        # A bad reflection model or key must crash here: inside the loop every proposal
+        # failure is logged and the loop carries on until the task budget is spent.
+        model.complete("Reply with OK.", reflection_config)
         propose = make_reflector(
             lambda prompt: model.complete(prompt, reflection_config),
             REFLECTION_PROMPTS[stage["reflection_prompt"]],
@@ -99,6 +102,7 @@ def main() -> None:
         seed=args.seed,
         log_path=None if log_path is None else str(log_path.relative_to(PROJECT_ROOT)),
         best_candidate=best_id,
+        budget=args.budget,
     )
     path = save_run(RESULTS_DIR, run)
     print(json.dumps(run["results"], indent=2))

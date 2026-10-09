@@ -50,7 +50,7 @@ def main() -> None:
     # Reasoning off: with it on, DeepSeek spends its whole token budget thinking and returns
     # no content (even at 16k tokens). Room to write a whole instruction; 60s would cut it short.
     reflection_config = ModelConfig(
-        model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=300.0
+        model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=120.0
     )
     started_at = datetime.now(UTC)
     stem = f"{started_at:%Y%m%d-%H%M%S-%f}_stage4_seed{args.seed}"
@@ -74,7 +74,8 @@ def main() -> None:
     optimiser = dspy.GEPA(
         metric=metric,
         max_metric_calls=args.budget,
-        reflection_lm=make_lm(reflection_config),
+        # gepa swallows reflection errors and returns the seed, so this LM stops the run too.
+        reflection_lm=make_lm(reflection_config, [StopOnLMError(exit_run)]),
         reflection_minibatch_size=MINIBATCH_SIZE,
         candidate_selection_strategy="pareto",
         skip_perfect_score=True,
@@ -117,6 +118,7 @@ def main() -> None:
             "seed": args.seed,
             "log_path": str(log_path.relative_to(PROJECT_ROOT)),
             "best_candidate": log["best"],
+            "budget": args.budget,
             "runtime_seconds": round(time.monotonic() - start, 2),
         },
         "predictions": predictions,

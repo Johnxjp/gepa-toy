@@ -16,8 +16,10 @@ summarise_runs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(summarise_runs)
 
 
-def run(stage, accuracy, score, errors=0):
-    metadata = {} if stage is None else {"stage": stage}
+def run(stage, accuracy, score, errors=0, split="test"):
+    metadata = {"data_file": f"data/splits/{split}.tsv"}
+    if stage is not None:
+        metadata["stage"] = stage
     return {
         "metadata": metadata,
         "results": {
@@ -62,13 +64,16 @@ class SummariseRunsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarise_runs.summarise_runs([run("9", 0.5, 0.6)])
 
-    def test_main_reads_only_runs_with_a_stage(self):
+    def test_main_reads_only_test_runs_with_a_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             results = Path(tmp)
             (results / "gepa").mkdir()
             (results / "a_test.json").write_text(json.dumps(run("2", 0.5, 0.6)))
             (results / "b_test.json").write_text(json.dumps(run("2", 0.7, 0.8)))
             (results / "c_train.json").write_text(json.dumps(run(None, 0.1, 0.1)))
+            (results / "d_label_key.json").write_text(
+                json.dumps(run("4", 0.9, 0.9, split="label_key"))
+            )
             (results / "gepa" / "log.json").write_text("{}")
             (results / "cache.sqlite").write_bytes(b"")
             with (

@@ -72,7 +72,10 @@ def extract_instruction(reply: str) -> str:
     blocks = FENCED_BLOCK.findall(reply)
     if not blocks:
         raise ValueError(f"No fenced code block in reflection reply: {reply[:80]!r}")
-    return blocks[-1].removesuffix("\n")
+    instruction = blocks[-1].removesuffix("\n")
+    if not instruction.strip():
+        raise ValueError(f"Empty fenced code block in reflection reply: {reply[:80]!r}")
+    return instruction
 
 
 def make_reflector(
