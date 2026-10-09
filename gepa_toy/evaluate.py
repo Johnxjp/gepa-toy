@@ -159,6 +159,7 @@ def evaluate(
     build_prompt: Callable,
     model_config: ModelConfig,
     workers: int = 8,
+    complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> dict:
     # Gathered before any model calls, so a failure here doesn't waste a paid run.
     metadata = {
@@ -170,7 +171,7 @@ def evaluate(
     }
     start = time.monotonic()
     predictions = evaluate_rows(
-        read_tsv(data_file), build_prompt, model_config, workers
+        read_tsv(data_file), build_prompt, model_config, workers, complete
     )
     metadata["runtime_seconds"] = round(time.monotonic() - start, 2)
     return {
