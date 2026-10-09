@@ -16,6 +16,7 @@ data/customer_support_tickets/*
 !data/customer_support_tickets/tag_groups.tsv
 !data/customer_support_tickets/tag_spelling_map.tsv
 !data/customer_support_tickets/labels.json
+!data/customer_support_tickets/README.md
 
 # Secrets
 .env
