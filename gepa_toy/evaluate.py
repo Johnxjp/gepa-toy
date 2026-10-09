@@ -8,9 +8,9 @@ from pathlib import Path
 import openai
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-from gepa_toy.config import PROJECT_ROOT
+from gepa_toy.config import LABELS, PROJECT_ROOT
 from gepa_toy.data_processing.tsv import read_tsv
-from gepa_toy.model import ModelConfig, Result, classify
+from gepa_toy.model import ModelConfig, ResponseShapeError, Result, classify
 from gepa_toy.utils import git_version
 
 SINGLE_FIELDS = ("queue", "type", "priority")
@@ -23,6 +23,7 @@ TRANSIENT_ERRORS = (
     openai.APIConnectionError,
     openai.RateLimitError,
     openai.InternalServerError,
+    ResponseShapeError,
 )
 
 
@@ -101,6 +102,26 @@ def field_scores(predictions: list[dict], field: str) -> dict:
     }
 
 
+def evaluate_rows(
+    rows: list[dict],
+    build: Callable[[str, str], str],
+    model_config: ModelConfig,
+    workers: int,
+) -> list[dict]:
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(lambda r: predict(r, build, model_config), rows))
+
+
+def queue_confusion(predictions: list[dict]) -> dict:
+    rows = LABELS["queue"]
+    columns = rows + [NO_PREDICTION]
+    counts = [[0] * len(columns) for _ in rows]
+    for p in predictions:
+        predicted = p["predicted"]["queue"] if p["predicted"] else NO_PREDICTION
+        counts[rows.index(p["labels"]["queue"])][columns.index(predicted)] += 1
+    return {"rows": rows, "columns": columns, "counts": counts}
+
+
 def summarise(predictions: list[dict]) -> dict:
     """Aggregate scores for a run, for reporting and comparing prompts.
 
@@ -124,6 +145,7 @@ def summarise(predictions: list[dict]) -> dict:
         "tags": {
             key: sum(t[key] for t in tags) / n for key in ("f1", "precision", "recall")
         },
+        "queue_confusion": queue_confusion(predictions),
     }
 
 
@@ -142,11 +164,9 @@ def evaluate(
         "prompt": build_prompt("{subject}", "{body}"),
     }
     start = time.monotonic()
-    rows = read_tsv(data_file)
-    with ThreadPoolExecutor(workers) as pool:
-        predictions = list(
-            pool.map(lambda r: predict(r, build_prompt, model_config), rows)
-        )
+    predictions = evaluate_rows(
+        read_tsv(data_file), build_prompt, model_config, workers
+    )
     metadata["runtime_seconds"] = round(time.monotonic() - start, 2)
     return {
         "metadata": metadata,

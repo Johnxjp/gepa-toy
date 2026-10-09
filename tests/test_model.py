@@ -8,7 +8,9 @@ from openai.types.chat.chat_completion import Choice
 from gepa_toy.model import (
     OPENROUTER_BASE_URL,
     ModelConfig,
+    ResponseShapeError,
     classify,
+    complete,
     parse_prediction,
 )
 
@@ -69,6 +71,13 @@ class ClassifyTest(unittest.TestCase):
         choice = Choice(index=0, finish_reason="stop", message=message)
         result = self.reply(openai, completion([choice]))
         self.assertEqual(result.prediction.queue, "IT Support")
+        self.assertEqual(result.raw, VALID)
+
+    def test_complete_returns_the_reply_text(self, openai):
+        message = ChatCompletionMessage(role="assistant", content="any text")
+        choice = Choice(index=0, finish_reason="stop", message=message)
+        openai.return_value.chat.completions.create.return_value = completion([choice])
+        self.assertEqual(complete("prompt", ModelConfig()), "any text")
 
     def test_sends_config_to_openrouter(self, openai):
         model_config = ModelConfig(
@@ -79,7 +88,10 @@ class ClassifyTest(unittest.TestCase):
             reasoning=True,
         )
         create = openai.return_value.chat.completions.create
-        create.return_value = completion([])
+        message = ChatCompletionMessage(role="assistant", content="")
+        create.return_value = completion(
+            [Choice(index=0, finish_reason="stop", message=message)]
+        )
         classify("the prompt", model_config)
         openai.assert_called_once_with(
             base_url=OPENROUTER_BASE_URL, api_key="test", timeout=9.0
@@ -99,23 +111,33 @@ class ClassifyTest(unittest.TestCase):
         self.assertIsNone(result.prediction)
         self.assertEqual(result.error, "no JSON object in response")
 
-    def test_no_choices_is_an_error(self, openai):
+    def test_no_choices_raises(self, openai):
         for choices in ([], None):
-            result = self.reply(openai, completion(choices))
-            self.assertIsNone(result.prediction)
-            self.assertEqual(result.error, "unexpected response shape")
-            self.assertIn('"id":"x"', result.raw)
+            with self.assertRaises(ResponseShapeError) as raised:
+                self.reply(openai, completion(choices))
+            self.assertIn("unexpected response shape", str(raised.exception))
+            self.assertIn('"id":"x"', str(raised.exception))
 
-    def test_non_json_or_null_body_is_an_error(self, openai):
+    def test_choice_without_message_raises(self, openai):
+        # The SDK builds the response without validating it, so a choice can carry no message.
+        for choices in (
+            [Choice.construct(index=0, finish_reason="stop", message=None)],
+            [Choice.construct(index=0, finish_reason="stop")],
+            "oops",
+        ):
+            with self.assertRaises(ResponseShapeError) as raised:
+                self.reply(openai, completion(choices))
+            self.assertIn("unexpected response shape", str(raised.exception))
+
+    def test_non_json_or_null_body_raises(self, openai):
         # The SDK returns the body as a str for non-JSON content types, and None for `null`.
         for response, raw in (
             ("<html>Bad gateway</html>", "<html>Bad gateway</html>"),
             (None, "None"),
         ):
-            result = self.reply(openai, response)
-            self.assertIsNone(result.prediction)
-            self.assertEqual(result.error, "unexpected response shape")
-            self.assertEqual(result.raw, raw)
+            with self.assertRaises(ResponseShapeError) as raised:
+                self.reply(openai, response)
+            self.assertEqual(str(raised.exception), f"unexpected response shape: {raw}")
 
 
 if __name__ == "__main__":

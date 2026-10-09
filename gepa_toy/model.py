@@ -4,7 +4,7 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from openai.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from pydantic import BaseModel, ValidationError
 
 from gepa_toy import config
@@ -50,7 +50,11 @@ def parse_prediction(raw: str) -> Result:
     return Result(prediction=prediction, raw=raw)
 
 
-def classify(prompt: str, model_config: ModelConfig) -> Result:
+class ResponseShapeError(Exception):
+    """OpenRouter answered 200 but the body is not a completion with choices."""
+
+
+def complete(prompt: str, model_config: ModelConfig) -> str:
     client = OpenAI(
         base_url=OPENROUTER_BASE_URL,
         api_key=os.environ["OPENROUTER_API_KEY"],
@@ -63,13 +67,20 @@ def classify(prompt: str, model_config: ModelConfig) -> Result:
         messages=[{"role": "user", "content": prompt}],
         extra_body={"reasoning": {"enabled": model_config.reasoning}},
     )
-    # OpenRouter can return 200 with an error body and no choices when the upstream provider
-    # fails, and the SDK hands back a plain str or None for non-JSON or null bodies.
-    if not isinstance(response, ChatCompletion) or not response.choices:
+    # OpenRouter can return 200 with an error body and no choices, or a choice with no
+    # message, when the upstream provider fails; the SDK doesn't validate, so it hands back
+    # whatever came (a plain str or None for non-JSON or null bodies).
+    choices = response.choices if isinstance(response, ChatCompletion) else None
+    message = choices[0].message if isinstance(choices, list) and choices else None
+    if not isinstance(message, ChatCompletionMessage):
         raw = (
             response.model_dump_json()
             if isinstance(response, ChatCompletion)
             else str(response)
         )
-        return Result(prediction=None, raw=raw, error="unexpected response shape")
-    return parse_prediction(response.choices[0].message.content or "")
+        raise ResponseShapeError(f"unexpected response shape: {raw}")
+    return message.content or ""
+
+
+def classify(prompt: str, model_config: ModelConfig) -> Result:
+    return parse_prediction(complete(prompt, model_config))
