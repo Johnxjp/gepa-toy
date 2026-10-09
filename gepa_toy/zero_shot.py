@@ -27,28 +27,47 @@ DESCRIPTIONS = {
     },
 }
 
+PLAIN_INSTRUCTION = """You are classifying a customer support ticket.
 
-def _options(values, descriptions=None):
-    if descriptions is None:
-        return "\n".join(f"- {v}" for v in values)
-    return "\n".join(
-        f"- {v}: {descriptions[v]}" if v in descriptions else f"- {v}" for v in values
-    )
+Pick exactly one queue, one type and one priority. Pick one or more tags. Use only the values listed below, spelled exactly as written."""
 
 
-def _build(subject: str, body: str, descriptions: dict) -> str:
-    return f"""You are classifying a customer support ticket.
+def _options(values):
+    return "\n".join(f"- {v}" for v in values)
 
-Pick exactly one queue, one type and one priority. Pick one or more tags. Use only the values listed below, spelled exactly as written.
+
+def _described(field):
+    return "\n".join(f"- {v}: {DESCRIPTIONS[field][v]}" for v in LABELS[field])
+
+
+# The descriptions live in the instruction, so GEPA can rewrite them (design D5).
+SEED_INSTRUCTION = f"""{PLAIN_INSTRUCTION}
+
+Queue descriptions:
+{_described("queue")}
+
+Type descriptions:
+{_described("type")}
+
+Priority descriptions:
+{_described("priority")}"""
+
+
+def build(instruction: str, subject: str, body: str) -> str:
+    """The instruction on top; label lists, ticket and reply format fixed below it."""
+    # Concatenated, not substituted, so braces in a GEPA-written instruction stay verbatim.
+    return (
+        instruction
+        + f"""
 
 Queue (choose one):
-{_options(LABELS["queue"], descriptions.get("queue"))}
+{_options(LABELS["queue"])}
 
 Type (choose one):
-{_options(LABELS["type"], descriptions.get("type"))}
+{_options(LABELS["type"])}
 
 Priority (choose one):
-{_options(LABELS["priority"], descriptions.get("priority"))}
+{_options(LABELS["priority"])}
 
 Tags (choose one or more):
 {_options(LABELS["tags"])}
@@ -60,12 +79,12 @@ Ticket body:
 Respond with only a JSON object in this shape, with no other text:
 {{"queue": "<queue>", "type": "<type>", "priority": "<priority>", "tags": ["<tag>"]}}
 """
+    )
 
 
 def build_prompt(subject: str, body: str) -> str:
-    return _build(subject, body, {})
+    return build(PLAIN_INSTRUCTION, subject, body)
 
 
 def build_expanded_prompt(subject: str, body: str) -> str:
-    """Zero-shot prompt plus the README's description of each queue, type and priority."""
-    return _build(subject, body, DESCRIPTIONS)
+    return build(SEED_INSTRUCTION, subject, body)

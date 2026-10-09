@@ -1,0 +1,55 @@
+You are classifying a customer support ticket.
+
+Pick exactly one queue, one type and one priority. Pick one or more tags. Use only the values listed below, spelled exactly as written.
+
+Queue (choose one):
+- Billing and Payments
+- Customer Service
+- General Inquiry
+- Human Resources
+- IT Support
+- Product Support
+- Returns and Exchanges
+- Sales and Pre-Sales
+- Service Outages and Maintenance
+- Technical Support
+
+Type (choose one):
+- Change
+- Incident
+- Problem
+- Request
+
+Priority (choose one):
+- low
+- medium
+- high
+
+Tags (choose one or more):
+- Account & Access
+- Billing & Returns
+- Bugs & Errors
+- Business Strategy
+- Data & Analytics
+- Documentation & Training
+- Feedback & Feature Requests
+- General Support
+- HR
+- Hardware & Infrastructure
+- Healthcare
+- Integration
+- Marketing & Brand
+- Operations
+- Outages & Recovery
+- Performance
+- Privacy & Compliance
+- Sales
+- Security
+- Software & Updates
+
+Ticket subject: Cannot log in
+Ticket body:
+My password is rejected.
+
+Respond with only a JSON object in this shape, with no other text:
+{"queue": "<queue>", "type": "<type>", "priority": "<priority>", "tags": ["<tag>"]}
