@@ -11,6 +11,7 @@ TAG_GROUPS = DATA_DIR / "tag_groups.tsv"
 LABELS_JSON = DATA_DIR / "labels.json"
 SPLITS_DIR = DATA_DIR / "splits"
 RESULTS_DIR = PROJECT_ROOT / "results"
+CACHE_PATH = RESULTS_DIR / "cache.sqlite"
 
 LABELS = json.loads(LABELS_JSON.read_text())
 
