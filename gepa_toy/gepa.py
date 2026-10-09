@@ -18,7 +18,7 @@ from gepa_toy.utils import git_version
 class Rollout:
     score: float  # 0 to 1
     trace: str  # what the reflector sees: inputs and output, as text
-    feedback: str  # one line on the outcome, in the task's chosen feedback mode
+    feedback: str  # the outcome as text, in the task's chosen feedback mode
     record: dict  # task-specific detail for the log (id, prediction, raw reply)
 
 
@@ -180,7 +180,25 @@ def select_parent(
 ) -> dict:
     if settings.selection == "best":
         return best_candidate(candidates)
-    raise NotImplementedError("pareto selection is phase H")
+    front = pareto_front(candidates)
+    return rng.choices(front, weights=[len(c["pareto_wins"]) for c in front])[0]
+
+
+def pareto_front(candidates: list[dict]) -> list[dict]:
+    """Candidates that win at least one pareto example, minus the dominated ones.
+
+    A candidate is dominated when another one still in the running wins every example
+    it wins. Checked from the lowest mean upwards, so of two with the same win set the
+    weaker goes (the earlier one on equal means); dropping only shrinks the set of
+    possible dominators, so one pass is enough. A candidate that wins an example nobody
+    else wins can never be dropped.
+    """
+    front = [c for c in candidates if c["pareto_wins"]]
+    for c in sorted(front, key=lambda c: c["mean_pareto_score"]):
+        wins = set(c["pareto_wins"])
+        if any(o is not c and wins <= set(o["pareto_wins"]) for o in front):
+            front.remove(c)
+    return front
 
 
 def best_candidate(candidates: list[dict]) -> dict:
@@ -237,5 +255,7 @@ def update_wins(candidates: list[dict]) -> None:
     for j in range(len(candidates[0]["pareto_scores"])):
         top = max(c["pareto_scores"][j] for c in candidates)
         for c in candidates:
-            if c["pareto_scores"][j] == top:
+            # isclose: gepa_score gives 0.7 or 0.7000000000000001 for the same result,
+            # depending on the tag counts, and ties must all win.
+            if math.isclose(c["pareto_scores"][j], top):
                 c["pareto_wins"].append(j)

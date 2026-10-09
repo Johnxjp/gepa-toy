@@ -1,11 +1,21 @@
 import json
 import math
+import random
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
-from gepa_toy.gepa import Rollout, Settings, optimise
+from gepa_toy.gepa import (
+    Rollout,
+    Settings,
+    add_candidate,
+    best_candidate,
+    optimise,
+    pareto_front,
+    select_parent,
+)
 
 GIT = {"commit": "test", "dirty": False, "changes": []}
 
@@ -41,12 +51,13 @@ def keyword_score(candidate, example):
     """Planted answer: an example scores 1 when its keyword is in the candidate.
 
     A "!word" example scores 1 when the word is absent, so a child that helps on the
-    minibatch can hurt on pareto.
+    minibatch can hurt on pareto. A "beta|gamma" example scores 1 when either word is
+    present, so two lines can win the same example with different words.
     """
     words = candidate.split()
     if example.startswith("!"):
         return 0.0 if example[1:] in words else 1.0
-    return 1.0 if example in words else 0.0
+    return 1.0 if any(word in words for word in example.split("|")) else 0.0
 
 
 def add_keyword(parent, rollouts):
@@ -204,11 +215,74 @@ class GepaTest(unittest.TestCase):
                 task, append_x, ["t1", "t2"], ["p1", "p2"], budget=11, minibatch_size=2
             )
 
-    def test_pareto_selection_is_a_hook(self):
-        task = FakeTask(longer_is_better)
-        settings = Settings(budget=20, minibatch_size=2, selection="pareto")
-        with self.assertRaises(NotImplementedError):
-            optimise("", ["t1", "t2"], ["p1"], task, append_x, settings, self.log_path)
+    def test_planted_answer_pareto_keeps_two_lines_and_best_follows_one(self):
+        # "gamma" helps on train and the second pareto example but loses "!gamma", so a
+        # gamma line and a gamma-free line win different examples. Only the gamma-free
+        # line can reach a mean of 1. Pareto sampling makes the iteration count
+        # seed-dependent, so only greedy gets a bound (at most 4 over 40 seeds).
+        train = ["alpha", "beta", "gamma"]
+        pareto = ["alpha", "beta|gamma", "!gamma"]
+        gamma_parents = {"pareto": set(), "best": set()}
+        for selection, seeds_with_gamma_parent in gamma_parents.items():
+            for seed in range(16):
+                with self.subTest(selection=selection, seed=seed):
+                    settings = Settings(
+                        budget=150, minibatch_size=2, selection=selection, seed=seed
+                    )
+                    log = optimise(
+                        "",
+                        train,
+                        pareto,
+                        FakeTask(keyword_score),
+                        add_keyword,
+                        settings,
+                        self.log_path,
+                    )
+                    candidates = log["candidates"]
+                    best = candidates[log["best"]]
+                    self.assertEqual(best["mean_pareto_score"], 1)
+                    if selection == "best":
+                        self.assertLess(best["iteration"], 8)
+                    for n, iteration in enumerate(log["iterations"]):
+                        parent = candidates[iteration["parent"]]
+                        if "gamma" in parent["text"].split():
+                            seeds_with_gamma_parent.add(seed)
+                        if selection == "best":
+                            pool = [
+                                c
+                                for c in candidates
+                                if c["iteration"] is None or c["iteration"] < n
+                            ]
+                            self.assertIs(parent, best_candidate(pool))
+                    self.assertTrue(
+                        any("gamma" in c["text"].split() for c in candidates)
+                    )
+        # A gamma candidate never beats the gamma-free line's mean and, being created
+        # later, loses ties, so greedy never comes back to it.
+        self.assertEqual(gamma_parents["best"], set())
+        self.assertGreater(len(gamma_parents["pareto"]), 1)
+
+    def test_same_seed_gives_identical_log_with_pareto_selection(self):
+        train = ["alpha", "beta", "gamma"]
+        pareto = ["alpha", "beta|gamma", "!gamma"]
+        logs = []
+        for _ in range(2):
+            settings = Settings(
+                budget=100, minibatch_size=2, selection="pareto", seed=4
+            )
+            log = optimise(
+                "",
+                train,
+                pareto,
+                FakeTask(keyword_score),
+                add_keyword,
+                settings,
+                self.log_path,
+            )
+            del log["metadata"]["started"], log["metadata"]["runtime_seconds"]
+            logs.append(log)
+        self.assertEqual(logs[0], logs[1])
+        self.assertGreater(len({i["parent"] for i in logs[0]["iterations"]}), 1)
 
     def test_equal_child_is_rejected_and_never_scored_on_pareto(self):
         train = ["t1", "t2", "t3", "t4"]
@@ -508,6 +582,104 @@ class GepaTest(unittest.TestCase):
         # Each epoch (2 minibatches) shows every keyword, so at least one is added per epoch:
         # 4 keywords need at most 4 epochs of 2 iterations.
         self.assertLess(best["iteration"], 8)
+
+
+def candidates_from(rows):
+    """One candidate per row of pareto scores, ids in row order."""
+    candidates = []
+    for row in rows:
+        rollouts = [Rollout(score=s, trace="", feedback="", record={}) for s in row]
+        add_candidate(candidates, str(len(candidates)), None, None, rollouts)
+    return candidates
+
+
+def draws(candidates, n=3000, seed=0):
+    """How often select_parent picks each id over n pareto selections."""
+    rng = random.Random(seed)
+    settings = Settings(budget=1, selection="pareto")
+    return Counter(select_parent(candidates, settings, rng)["id"] for _ in range(n))
+
+
+class ParetoSelectionTest(unittest.TestCase):
+    def test_winners_per_example_include_ties(self):
+        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
+        self.assertEqual([c["pareto_wins"] for c in candidates], [[0], [0, 1], [2]])
+
+    def test_weights_equal_win_counts_and_sampling_matches(self):
+        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
+        front = pareto_front(candidates)
+        self.assertEqual([c["id"] for c in front], [1, 2])
+        self.assertEqual([len(c["pareto_wins"]) for c in front], [2, 1])
+        counts = draws(candidates, n=3000)
+        self.assertEqual(set(counts), {1, 2})
+        self.assertAlmostEqual(counts[1] / 3000, 2 / 3, delta=0.05)
+        self.assertAlmostEqual(counts[2] / 3000, 1 / 3, delta=0.05)
+
+    def test_candidate_that_wins_nothing_is_never_picked(self):
+        candidates = candidates_from([[1, 0.5], [0.5, 0]])
+        self.assertEqual(candidates[1]["pareto_wins"], [])
+        self.assertEqual(set(draws(candidates)), {0})
+
+    def test_subset_win_set_is_never_picked(self):
+        candidates = candidates_from([[1, 0, 0], [1, 1, 0], [0, 0, 1]])
+        self.assertEqual(candidates[0]["pareto_wins"], [0])
+        self.assertNotIn(0, draws(candidates))
+
+    def test_same_win_set_only_the_higher_mean_can_be_picked(self):
+        for rows, weaker in (
+            ([[1, 1, 0], [1, 1, 0.5], [0, 0, 1]], 0),
+            ([[1, 1, 0.5], [1, 1, 0], [0, 0, 1]], 1),
+        ):
+            with self.subTest(weaker=weaker):
+                candidates = candidates_from(rows)
+                self.assertEqual(
+                    candidates[0]["pareto_wins"], candidates[1]["pareto_wins"]
+                )
+                counts = draws(candidates)
+                self.assertNotIn(weaker, counts)
+                self.assertEqual(set(counts), {1 - weaker, 2})
+
+    def test_wins_include_ties_that_differ_only_by_float_rounding(self):
+        # Real gepa_scores for the same result can come out one ulp apart.
+        tie = [0.7, math.nextafter(0.7, 1)]
+        candidates = candidates_from([[tie[0], 1], [tie[1], 0]])
+        self.assertEqual([c["pareto_wins"] for c in candidates], [[0, 1], [0]])
+
+    def test_equal_mean_and_identical_wins_keeps_the_later_candidate(self):
+        candidates = candidates_from([[1, 1, 0], [1, 1, 0]])
+        self.assertEqual([c["id"] for c in pareto_front(candidates)], [1])
+        self.assertIs(best_candidate(candidates), candidates[0])
+
+    def test_unique_win_survives_whatever_its_mean(self):
+        candidates = candidates_from([[1, 1, 1, 0], [0, 0, 0, 1]])
+        counts = draws(candidates)
+        self.assertEqual(set(counts), {0, 1})
+        self.assertAlmostEqual(counts[1] / 3000, 1 / 4, delta=0.05)
+
+    def test_dominance_needs_one_candidate_with_a_superset_win_set(self):
+        # Design 4.4: dominated means another single candidate wins everything this one
+        # wins. Candidate 2 has the lowest mean and its wins are covered only by 0 and 1
+        # together, so it stays. (The reference implementation would drop it.)
+        candidates = candidates_from([[1, 0, 0.9], [0, 1, 0.9], [1, 1, 0]])
+        self.assertEqual(candidates[2]["pareto_wins"], [0, 1])
+        self.assertEqual([c["id"] for c in pareto_front(candidates)], [0, 1, 2])
+
+    def test_dominated_candidate_with_highest_mean_is_still_the_final_pick(self):
+        candidates = candidates_from([[1, 0.9, 0.9], [1, 1, 0], [0, 0, 1]])
+        self.assertIs(best_candidate(candidates), candidates[0])
+        self.assertNotIn(0, draws(candidates))
+
+    def test_same_seed_gives_the_same_picks(self):
+        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
+        settings = Settings(budget=1, selection="pareto")
+        picks = []
+        for _ in range(2):
+            rng = random.Random(7)
+            picks.append(
+                [select_parent(candidates, settings, rng)["id"] for _ in range(50)]
+            )
+        self.assertEqual(picks[0], picks[1])
+        self.assertEqual(set(picks[0]), {1, 2})
 
 
 if __name__ == "__main__":
