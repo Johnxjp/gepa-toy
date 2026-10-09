@@ -17,3 +17,7 @@ LABELS = json.loads(LABELS_JSON.read_text())
 
 # Chosen in docs/dataset_preparation.md; lower values chain clusters together.
 DUPLICATE_CUTOFF = 0.45
+
+GEPA_RESULTS_DIR = RESULTS_DIR / "gepa"
+# Reflection needs a stronger model than the task; the docs leave the choice open.
+REFLECTION_MODEL = "deepseek/deepseek-v4.1-flash"

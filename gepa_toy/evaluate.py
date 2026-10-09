@@ -8,9 +8,10 @@ from pathlib import Path
 import openai
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
+from gepa_toy import model
 from gepa_toy.config import LABELS, PROJECT_ROOT
 from gepa_toy.data_processing.tsv import read_tsv
-from gepa_toy.model import ModelConfig, ResponseShapeError, Result, classify
+from gepa_toy.model import ModelConfig, ResponseShapeError, Result, parse_prediction
 from gepa_toy.utils import git_version
 
 SINGLE_FIELDS = ("queue", "type", "priority")
@@ -66,11 +67,14 @@ def gepa_score(predicted: dict | None, labels: dict) -> float:
 
 
 def predict(
-    row: dict[str, str], build_prompt: Callable, model_config: ModelConfig
+    row: dict[str, str],
+    build_prompt: Callable,
+    model_config: ModelConfig,
+    complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> dict:
     prompt = build_prompt(row["subject"], row["body"])
     try:
-        result = classify(prompt, model_config)
+        result = parse_prediction((complete or model.complete)(prompt, model_config))
     except TRANSIENT_ERRORS as e:
         result = Result(prediction=None, raw="", error=f"API error: {e}")
     predicted = result.prediction.model_dump() if result.prediction else None
@@ -107,9 +111,10 @@ def evaluate_rows(
     build: Callable[[str, str], str],
     model_config: ModelConfig,
     workers: int,
+    complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> list[dict]:
     with ThreadPoolExecutor(workers) as pool:
-        return list(pool.map(lambda r: predict(r, build, model_config), rows))
+        return list(pool.map(lambda r: predict(r, build, model_config, complete), rows))
 
 
 def queue_confusion(predictions: list[dict]) -> dict:
