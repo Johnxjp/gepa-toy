@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket Annotation</title>
+<style>
+  :root {
+    --bg: #fafaf9; --panel: #fff; --text: #1c1917; --muted: #78716c;
+    --border: #e7e5e4; --accent: #2563eb; --done: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1917; --panel: #292524; --text: #f5f5f4; --muted: #a8a29e;
+      --border: #44403c; --accent: #60a5fa; --done: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; margin: 0; }
+  #progress { color: var(--muted); }
+  #bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  #bar div { height: 100%; background: var(--done); width: 0; }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 20px; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .status { font-weight: 600; }
+  .status.done { color: var(--done); }
+  .field { margin-bottom: 16px; }
+  .field-name { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .field-value { white-space: pre-wrap; }
+  form label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+  select, summary { width: 100%; padding: 8px; margin-bottom: 14px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  details { position: relative; }
+  summary { list-style: none; cursor: pointer; min-height: 38px; }
+  summary::-webkit-details-marker { display: none; }
+  #tag-options { position: absolute; z-index: 1; top: 42px; left: 0; right: 0; max-height: 280px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+  #tag-options label { font-weight: 400; display: flex; gap: 8px; padding: 3px 4px; cursor: pointer; }
+  .buttons { display: flex; gap: 8px; }
+  button { flex: 1; padding: 9px; font: inherit; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ticket annotation</h1>
+  <span id="progress"></span>
+  <div id="bar"><div></div></div>
+  <button id="next-todo" style="flex: none">Next unlabelled</button>
+</header>
+<main>
+  <section>
+    <div class="meta">Ticket <span id="ticket-id"></span> · <span id="position"></span> · <span id="status" class="status"></span></div>
+    <div id="fields"></div>
+  </section>
+  <section>
+    <form id="form">
+      <label for="queue">Queue</label>
+      <select id="queue" required></select>
+      <label for="priority">Priority</label>
+      <select id="priority" required></select>
+      <label for="type">Type</label>
+      <select id="type" required></select>
+      <label>Tags</label>
+      <details id="tags">
+        <summary id="tags-summary"></summary>
+        <div id="tag-options"></div>
+      </details>
+      <div class="buttons">
+        <button type="button" id="prev">← Prev</button>
+        <button type="submit" class="primary">Save &amp; next →</button>
+      </div>
+      <div class="hint">⌘/Ctrl + Enter saves · Alt + ←/→ moves without saving</div>
+    </form>
+  </section>
+</main>
+<script>
+const SINGLE = ["queue", "priority", "type"];
+let data, index = 0;
+
+function annotated(id) { return id in data.annotations; }
+
+function fillSelect(name) {
+  const select = document.getElementById(name);
+  select.innerHTML = '<option value="">Choose…</option>' +
+    data.labels[name].map(v => `<option>${escape(v)}</option>`).join("");
+}
+
+function escape(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// Ticket text stores line breaks as a literal "\n" or as "<br>".
+function lineBreaks(s) {
+  return s.replace(/\\n/g, "\n").replace(/<br\s*\/?>/gi, "\n");
+}
+
+function selectedTags() {
+  return [...document.querySelectorAll("#tag-options input:checked")].map(i => i.value);
+}
+
+function updateTagSummary() {
+  const tags = selectedTags();
+  document.getElementById("tags-summary").textContent = tags.length ? tags.join(", ") : "Choose…";
+}
+
+function render() {
+  const ticket = data.tickets[index];
+  const saved = data.annotations[ticket.id] || {};
+  document.getElementById("ticket-id").textContent = ticket.id;
+  document.getElementById("position").textContent = `${index + 1} of ${data.tickets.length}`;
+  const status = document.getElementById("status");
+  status.textContent = annotated(ticket.id) ? "Labelled" : "Not labelled";
+  status.classList.toggle("done", annotated(ticket.id));
+  document.getElementById("fields").innerHTML = Object.entries(ticket.fields).map(([k, v]) =>
+    `<div class="field"><div class="field-name">${escape(k)}</div><div class="field-value">${escape(lineBreaks(v)) || "—"}</div></div>`
+  ).join("");
+  for (const name of SINGLE) document.getElementById(name).value = saved[name] || "";
+  for (const box of document.querySelectorAll("#tag-options input")) {
+    box.checked = (saved.tags || []).includes(box.value);
+  }
+  document.getElementById("tags").open = false;
+  updateTagSummary();
+
+  const done = data.tickets.filter(t => annotated(t.id)).length;
+  document.getElementById("progress").textContent = `${done} / ${data.tickets.length} labelled`;
+  document.querySelector("#bar div").style.width = `${100 * done / data.tickets.length}%`;
+}
+
+function go(i) {
+  index = Math.max(0, Math.min(data.tickets.length - 1, i));
+  render();
+}
+
+function nextUnlabelled() {
+  const order = [...data.tickets.keys()].map(k => (index + 1 + k) % data.tickets.length);
+  const next = order.find(i => !annotated(data.tickets[i].id));
+  if (next !== undefined) go(next);
+}
+
+async function save(e) {
+  e.preventDefault();
+  const ticket = data.tickets[index];
+  const annotation = { tags: selectedTags() };
+  for (const name of SINGLE) annotation[name] = document.getElementById(name).value;
+  const res = await fetch("/api/annotations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: ticket.id, ...annotation }),
+  });
+  if (!res.ok) { alert("Save failed"); return; }
+  data.annotations[ticket.id] = annotation;
+  if (index < data.tickets.length - 1) go(index + 1); else render();
+}
+
+async function init() {
+  data = await (await fetch("/api/data")).json();
+  SINGLE.forEach(fillSelect);
+  document.getElementById("tag-options").innerHTML = data.labels.tags.map(t =>
+    `<label><input type="checkbox" value="${escape(t)}">${escape(t)}</label>`).join("");
+  document.getElementById("tag-options").addEventListener("change", updateTagSummary);
+  document.getElementById("form").addEventListener("submit", save);
+  document.getElementById("prev").addEventListener("click", () => go(index - 1));
+  document.getElementById("next-todo").addEventListener("click", nextUnlabelled);
+  document.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") document.getElementById("form").requestSubmit();
+    if (e.altKey && e.key === "ArrowLeft") go(index - 1);
+    if (e.altKey && e.key === "ArrowRight") go(index + 1);
+  });
+  // Close the tags dropdown when clicking elsewhere.
+  document.addEventListener("click", e => {
+    const tags = document.getElementById("tags");
+    if (!tags.contains(e.target)) tags.open = false;
+  });
+  const firstTodo = data.tickets.findIndex(t => !annotated(t.id));
+  go(firstTodo === -1 ? 0 : firstTodo);
+}
+
+init();
+</script>
+</body>
+</html>

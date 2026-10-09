@@ -1,0 +1,8 @@
+{
+  "tickets": "../data/customer_support_tickets/splits/label_sheet.tsv",
+  "labels": "../data/customer_support_tickets/labels.json",
+  "output": "data/annotations.json",
+  "id_field": "id",
+  "show_fields": ["subject", "body"],
+  "port": 8000
+}
