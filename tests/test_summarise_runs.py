@@ -79,7 +79,7 @@ class SummariseRunsTest(unittest.TestCase):
         lines = out.getvalue().splitlines()
         self.assertEqual(len(lines), 2)
         self.assertEqual(
-            lines[1].split(), ["2", "2", "0.600", "0.141", "0.700", "0.141"]
+            lines[1].split(), ["2", "2", "0.600", "0.141", "0.700", "0.141", "0.0"]
         )
 
 
