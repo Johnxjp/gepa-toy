@@ -39,13 +39,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--budget", type=int, default=1000, help="task-model calls")
+    parser.add_argument("--model", default=defaults.model)
     parser.add_argument("--reflection-model", default=REFLECTION_MODEL)
     # DSPy's reply format is longer than our JSON (design section 8); raise it here only.
     parser.add_argument("--max-tokens", type=int, default=defaults.max_tokens)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
 
-    task_config = ModelConfig(max_tokens=args.max_tokens)
+    task_config = ModelConfig(model=args.model, max_tokens=args.max_tokens)
     # Reasoning off: with it on, DeepSeek spends its whole token budget thinking and returns
     # no content (even at 16k tokens). Room to write a whole instruction; 60s would cut it short.
     reflection_config = ModelConfig(
@@ -115,6 +116,7 @@ def main() -> None:
             "stage": "4",
             "seed": args.seed,
             "log_path": str(log_path.relative_to(PROJECT_ROOT)),
+            "best_candidate": log["best"],
             "runtime_seconds": round(time.monotonic() - start, 2),
         },
         "predictions": predictions,
