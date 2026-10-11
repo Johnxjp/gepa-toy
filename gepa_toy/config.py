@@ -23,5 +23,5 @@ TASK_MODEL = "nvidia/nemotron-3.5-lightning"
 # model is not logged: if OpenRouter repoints the alias, runs before and after differ.
 REFLECTION_MODEL = "~deepseek/deepseek-flash-latest"
 
-# Chosen in docs/dataset_preparation.md; lower values chain clusters together.
+# Lower values chain clusters together.
 DUPLICATE_CUTOFF = 0.45

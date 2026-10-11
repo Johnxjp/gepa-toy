@@ -1,6 +1,6 @@
-"""Per-ticket feedback text for the reflector (docs/gepa_design.md, D6).
+"""Per-ticket feedback text for the reflector.
 
-Shared by our GEPA loop and the DSPy metric, so stages 2 and 4 read the same text.
+Shared by our GEPA loop and the DSPy metric, so both read the same text.
 """
 
 from gepa_toy.evaluate import SINGLE_FIELDS, gepa_score, tag_scores
@@ -29,7 +29,7 @@ def prediction_line(predicted: dict | None, error: str | None) -> str:
 
 
 def score_feedback(predicted: dict | None, labels: dict) -> str:
-    """Stage 1: the score alone, with no hint of which label was wrong."""
+    """The score alone, with no hint of which label was wrong."""
     return f"Score: {gepa_score(predicted, labels):.2f}"
 
 

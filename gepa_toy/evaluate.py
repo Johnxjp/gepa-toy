@@ -62,7 +62,7 @@ def predict(
     model_config: ModelConfig,
     complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> dict:
-    # API errors propagate and stop the run (docs/ticket_scoring.md section 5). Only a
+    # API errors propagate and stop the run. Only a
     # reply the model got wrong is recorded, as `error`.
     prompt = build_prompt(row["subject"], row["body"])
     result = parse_prediction((complete or model.complete)(prompt, model_config))
@@ -183,7 +183,7 @@ def evaluate(
 def save_run(results_dir: Path, run: dict) -> Path:
     started_at = datetime.fromisoformat(run["metadata"]["started_at"])
     split = Path(run["metadata"]["data_file"]).stem
-    # Microseconds so parallel runs (3 per stage) don't overwrite each other.
+    # Microseconds so parallel runs don't overwrite each other.
     path = results_dir / f"{started_at:%Y%m%d-%H%M%S-%f}_{split}.json"
     results_dir.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(run, indent=2) + "\n")

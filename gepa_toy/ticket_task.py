@@ -1,4 +1,4 @@
-"""The ticket task behind GEPA's Task protocol. See docs/gepa_design.md section 4.4."""
+"""The ticket task behind GEPA's Task protocol."""
 
 from typing import Literal
 

@@ -1,4 +1,4 @@
-"""GEPA core: candidates are strings, examples are opaque. See docs/gepa_design.md section 4."""
+"""GEPA core: candidates are strings, examples are opaque."""
 
 import json
 import math
@@ -78,7 +78,7 @@ def optimise(
             "pareto_size": len(pareto),
             "started": datetime.now(UTC).isoformat(),
             "runtime_seconds": 0.0,
-            # Caller's stage and seed go in from the first write, so a crashed run is still labelled.
+            # Caller's metadata and seed go in from the first write, so a crashed run is still labelled.
             **(metadata or {}),
         },
         "candidates": candidates,
@@ -193,7 +193,7 @@ def pareto_front(candidates: list[dict]) -> list[dict]:
     A candidate is dominated when every example it wins is also won by some other
     candidate still in the running, not necessarily the same one. This is the reference
     implementation's `remove_dominated_programs` (gepa-ai/gepa, gepa_utils.py), which
-    stage 4 runs. Checked from the lowest mean upwards, so of two with the same win set
+    DSPy's GEPA runs. Checked from the lowest mean upwards, so of two with the same win set
     the weaker goes (the earlier one on equal means). The reference rescans after each
     drop; dropping only shrinks the cover for later checks, so one pass gives the same
     result. A candidate that wins an example nobody else wins can never be dropped.

@@ -1,7 +1,4 @@
-"""Reflector: reflection prompt plus extraction of the proposed instruction.
-
-See docs/gepa_design.md sections 4.3 and 4.4 ("Reflection").
-"""
+"""Reflector: reflection prompt plus extraction of the proposed instruction."""
 
 import re
 from collections.abc import Callable

@@ -1,4 +1,4 @@
-"""Stage 4: the ticket classifier as a DSPy program, for `dspy.GEPA` (docs/gepa_design.md, part 3)."""
+"""The ticket classifier as a DSPy program, for `dspy.GEPA`."""
 
 import os
 import sys
@@ -24,7 +24,7 @@ from gepa_toy.zero_shot import SEED_INSTRUCTION
 
 # No JSON-mode retry when a reply doesn't parse: it would be an extra call the budget
 # doesn't count, its strict schema would give invalid labels a second chance that our
-# stage 2 doesn't get, and a provider rejecting the schema would stop the run.
+# own GEPA loop doesn't get, and a provider rejecting the schema would stop the run.
 dspy.configure(adapter=dspy.ChatAdapter(use_json_adapter_fallback=False))
 
 

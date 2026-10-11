@@ -40,7 +40,7 @@ def _described(field):
     return "\n".join(f"- {v}: {DESCRIPTIONS[field][v]}" for v in LABELS[field])
 
 
-# The descriptions live in the instruction, so GEPA can rewrite them (design D5).
+# The descriptions live in the instruction, so GEPA can rewrite them.
 SEED_INSTRUCTION = f"""{PLAIN_INSTRUCTION}
 
 Queue descriptions:
