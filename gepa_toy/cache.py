@@ -2,10 +2,9 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable
 from pathlib import Path
 
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 
 
 class Cache:
@@ -21,14 +20,14 @@ class Cache:
             )
 
     @staticmethod
-    def key(prompt: str, model_config: ModelConfig) -> str:
+    def key(prompt: str, model: Model) -> str:
         # Timeout is left out: it changes whether a reply arrives, not what it says.
         fields = {
             "prompt": prompt,
-            "model": model_config.model,
-            "temperature": model_config.temperature,
-            "max_tokens": model_config.max_tokens,
-            "reasoning": model_config.reasoning,
+            "model": model.model,
+            "temperature": model.temperature,
+            "max_tokens": model.max_tokens,
+            "reasoning": model.reasoning,
         }
         return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -45,19 +44,34 @@ class Cache:
                 "INSERT OR IGNORE INTO replies (key, raw) VALUES (?, ?)", (key, raw)
             )
 
-    def complete(
-        self,
-        prompt: str,
-        model_config: ModelConfig,
-        complete: Callable[[str, ModelConfig], str],
-    ) -> str:
-        key = self.key(prompt, model_config)
-        raw = self.get(key)
+
+class CachedModel:
+    """A model whose replies are read from and stored in a `Cache`.
+
+    Never wrap the reflection model: at temperature 1 the seeds would get the same stored
+    rewrite for the same prompt and stop exploring different ones.
+    """
+
+    def __init__(self, model: Model, cache: Cache):
+        self.model = model
+        self.cache = cache
+
+    def complete(self, prompt: str) -> str:
+        """The stored reply for `prompt` and this model's settings, calling the model on a miss.
+
+        Errors from the model propagate and nothing is stored, so the next call retries.
+        """
+        key = Cache.key(prompt, self.model)
+        raw = self.cache.get(key)
         if raw is None:
             # The API call runs outside the lock so workers are not serialised.
-            self.set(key, complete(prompt, model_config))
+            self.cache.set(key, self.model.complete(prompt))
             # Another process may have stored its reply for this key while we waited. The
             # task model is not deterministic at temperature 0, so return the stored reply,
             # or parallel runs (and later hits in this one) see different answers.
-            raw = self.get(key)
+            raw = self.cache.get(key)
         return raw
+
+    @property
+    def config(self) -> dict:
+        return self.model.config

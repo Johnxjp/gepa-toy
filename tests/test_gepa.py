@@ -11,11 +11,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gepa_toy.gepa import GEPA, Candidate, CandidatePool, Rollout, shuffled_positions
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 
 GIT = {"commit": "test", "dirty": False, "changes": []}
 TEMPLATE = "{instruction}\n---\n{rollouts}"
-REFLECTION_MODEL = ModelConfig(model="fake/reflector", temperature=1.0, reasoning=True)
+REFLECTION_MODEL = Model(model="fake/reflector", temperature=1.0, reasoning=True)
 
 
 class FakeTask:
@@ -82,27 +82,32 @@ class CountingPropose:
         return self.propose(parent, rollouts)
 
 
-def fake_reflection(propose):
-    """A stand-in for model.complete: parse the prompt back into the parent text and the
-    rollouts, call propose(parent, rollouts) and put the result in a fenced block.
+class FakeReflector:
+    """A stand-in for the reflection model: parse the prompt back into the parent text and
+    the rollouts, call propose(parent, rollouts) and put the result in a fenced block.
 
     Rollout scores are not in the prompt, so they are read from the feedback ("missing
     ..." means a score below 1). A result starting "NOFENCE:" is returned as the bare reply.
     """
 
-    def complete(prompt, model_config):
+    def __init__(self, propose):
+        self.propose = propose
+
+    @property
+    def config(self):
+        return REFLECTION_MODEL.config
+
+    def complete(self, prompt):
         parent, examples = prompt.split("\n---\n", 1)
         rollouts = []
         for block in re.split(r"\n\n(?=Example \d+\n)", examples):
             _, trace, feedback = block.split("\n")
             score = 0.0 if feedback.startswith("missing") else 1.0
             rollouts.append(Rollout(score, trace, feedback, {}))
-        result = propose(parent, rollouts)
+        result = self.propose(parent, rollouts)
         if result.startswith("NOFENCE:"):
             return result.removeprefix("NOFENCE:")
         return f"Thinking...\n```\n{result}\n```\n"
-
-    return complete
 
 
 class GepaTest(unittest.TestCase):
@@ -114,15 +119,14 @@ class GepaTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def make_gepa(self, task, **settings):
+    def make_gepa(self, task, propose, **settings):
         settings.setdefault("selection", "best")
-        return GEPA(task, REFLECTION_MODEL, TEMPLATE, self.log_path, **settings)
+        return GEPA(task, FakeReflector(propose), TEMPLATE, self.log_path, **settings)
 
     def optimise(self, task, propose, train, pareto, **settings):
         """Run GEPA with the fake reflection model; return the log. Keeps the GEPA as self.gepa."""
-        self.gepa = self.make_gepa(task, **settings)
-        with patch("gepa_toy.model.complete", fake_reflection(propose)):
-            self.best = self.gepa.run("", train, pareto)
+        self.gepa = self.make_gepa(task, propose, **settings)
+        self.best = self.gepa.run("", train, pareto)
         return self.gepa.log
 
     def test_budget_never_exceeded_wherever_it_lands(self):
@@ -477,20 +481,6 @@ class GepaTest(unittest.TestCase):
         self.assertIn("Example 1", first["reflection_prompt"])
         self.assertEqual(first["reflection_reply"], "just say alpha")
 
-    def test_reflection_model_gets_the_configured_model(self):
-        complete = fake_reflection(add_keyword)
-        calls = []
-
-        def recording(prompt, model_config):
-            calls.append(model_config)
-            return complete(prompt, model_config)
-
-        gepa = self.make_gepa(FakeTask(keyword_score), budget=8, minibatch_size=2)
-        with patch("gepa_toy.model.complete", recording):
-            gepa.run("", ["alpha", "beta"], ["alpha"])
-        self.assertEqual(calls, [REFLECTION_MODEL] * len(calls))
-        self.assertTrue(calls)
-
     def test_run_returns_the_best_candidate(self):
         train = ["alpha", "beta", "gamma", "delta"]
         pareto = ["alpha", "beta", "gamma", "!delta"]
@@ -512,13 +502,12 @@ class GepaTest(unittest.TestCase):
         train = ["alpha", "beta", "gamma", "delta"]
         pareto = ["alpha", "beta|gamma", "!gamma"]
         task = FakeTask(keyword_score)
-        gepa = self.make_gepa(task, budget=100, minibatch_size=2, seed=4)
+        gepa = self.make_gepa(task, add_keyword, budget=100, minibatch_size=2, seed=4)
         logs, pools = [], []
-        with patch("gepa_toy.model.complete", fake_reflection(add_keyword)):
-            for _ in range(2):
-                gepa.run("", train, pareto)
-                logs.append(gepa.log)
-                pools.append(gepa.pool)
+        for _ in range(2):
+            gepa.run("", train, pareto)
+            logs.append(gepa.log)
+            pools.append(gepa.pool)
         self.assertIsNot(logs[0], logs[1])
         self.assertIsNot(pools[0], pools[1])
         # The budget restarts with each run.
@@ -541,7 +530,7 @@ class GepaTest(unittest.TestCase):
             seed=5,
         )
         metadata = log["metadata"]
-        self.assertEqual(metadata["reflection_model"], REFLECTION_MODEL.model_dump())
+        self.assertEqual(metadata["reflection_model"], REFLECTION_MODEL.config)
         self.assertEqual(metadata["reflection_prompt"], TEMPLATE)
         self.assertEqual(
             metadata["settings"],

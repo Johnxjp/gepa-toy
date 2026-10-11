@@ -7,10 +7,10 @@ from pathlib import Path
 
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-from gepa_toy import model
+from gepa_toy.cache import CachedModel
 from gepa_toy.config import LABELS, PROJECT_ROOT
 from gepa_toy.data_processing.tsv import read_tsv
-from gepa_toy.model import ModelConfig, parse_prediction
+from gepa_toy.model import Model, parse_prediction
 from gepa_toy.utils import git_version
 
 SINGLE_FIELDS = ("queue", "type", "priority")
@@ -59,13 +59,12 @@ def gepa_score(predicted: dict | None, labels: dict) -> float:
 def predict(
     row: dict[str, str],
     build_prompt: Callable,
-    model_config: ModelConfig,
-    complete: Callable[[str, ModelConfig], str] | None = None,
+    model: Model | CachedModel,
 ) -> dict:
     # API errors propagate and stop the run. Only a
     # reply the model got wrong is recorded, as `error`.
     prompt = build_prompt(row["subject"], row["body"])
-    result = parse_prediction((complete or model.complete)(prompt, model_config))
+    result = parse_prediction(model.complete(prompt))
     predicted = result.prediction.model_dump() if result.prediction else None
     labels = labels_of(row)
     return {
@@ -98,13 +97,10 @@ def field_scores(predictions: list[dict], field: str) -> dict:
 def evaluate_rows(
     rows: list[dict],
     build: Callable[[str, str], str],
-    model_config: ModelConfig,
+    model: Model | CachedModel,
     workers: int,
-    complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> list[dict]:
-    return map_until_error(
-        lambda r: predict(r, build, model_config, complete), rows, workers
-    )
+    return map_until_error(lambda r: predict(r, build, model), rows, workers)
 
 
 def queue_confusion(predictions: list[dict]) -> dict:
@@ -156,22 +152,19 @@ def map_until_error(fn: Callable, items: list, workers: int) -> list:
 def evaluate(
     data_file: Path,
     build_prompt: Callable,
-    model_config: ModelConfig,
+    model: Model | CachedModel,
     workers: int = 8,
-    complete: Callable[[str, ModelConfig], str] | None = None,
 ) -> dict:
     # Gathered before any model calls, so a failure here doesn't waste a paid run.
     metadata = {
         "started_at": datetime.now(UTC).isoformat(),
         "git": git_version(),
         "data_file": str(data_file.relative_to(PROJECT_ROOT)),
-        "model": model_config.model_dump(),
+        "model": model.config,
         "prompt": build_prompt("{subject}", "{body}"),
     }
     start = time.monotonic()
-    predictions = evaluate_rows(
-        read_tsv(data_file), build_prompt, model_config, workers, complete
-    )
+    predictions = evaluate_rows(read_tsv(data_file), build_prompt, model, workers)
     metadata["runtime_seconds"] = round(time.monotonic() - start, 2)
     return {
         "metadata": metadata,

@@ -5,10 +5,11 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from gepa_toy import config
 from gepa_toy.data_processing.tsv import write_tsv
+from gepa_toy.model import Model
 from gepa_toy.reflect import DSPY_REFLECTION_PROMPT, REFLECTION_PROMPT
 from gepa_toy.zero_shot import SEED_INSTRUCTION
 
@@ -46,9 +47,9 @@ WRONG = RIGHT.replace("Technical Support", "IT Support")
 IMPROVED = "Improved instruction"
 
 
-def fake_complete(prompt, model_config):
+def fake_complete(model, prompt):
     """Reflection calls propose IMPROVED; the task model is right only under it."""
-    if model_config.reasoning:
+    if model.reasoning:
         return f"Here you go:\n```\n{IMPROVED}\n```"
     return RIGHT if IMPROVED in prompt else WRONG
 
@@ -128,9 +129,11 @@ class MainTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def run_main(self, *argv) -> dict:
-        complete = Mock(side_effect=fake_complete)
+        # autospec passes the Model as the first argument, so calls show which model ran.
         with (
-            patch("gepa_toy.model.complete", complete),
+            patch.object(
+                Model, "complete", autospec=True, side_effect=fake_complete
+            ) as complete,
             patch("sys.argv", ["run_gepa.py", *argv]),
             redirect_stdout(io.StringIO()) as out,
         ):
@@ -181,11 +184,11 @@ class MainTest(unittest.TestCase):
         self.assertEqual(run["results"]["queue"]["accuracy"], 1.0)
         self.assertEqual(run["results"]["n"], 2)
         reflection_calls = [
-            c for c in self.complete.call_args_list if c.args[1].reasoning
+            c for c in self.complete.call_args_list if c.args[0].reasoning
         ]
         # The probe call before the loop plus one proposal.
         self.assertEqual(len(reflection_calls), 2)
-        self.assertEqual(reflection_calls[0].args[1].model, config.REFLECTION_MODEL)
+        self.assertEqual(reflection_calls[0].args[0].model, config.REFLECTION_MODEL)
         self.assertIn(str(log_path.relative_to(self.root)), self.stdout)
 
     def test_each_stage_records_its_switches(self):
@@ -214,9 +217,9 @@ class MainTest(unittest.TestCase):
         self.assertEqual(log["metadata"]["reflection_model"]["model"], "x/y")
         self.assertEqual(
             {
-                c.args[1].model
+                c.args[0].model
                 for c in self.complete.call_args_list
-                if c.args[1].reasoning
+                if c.args[0].reasoning
             },
             {"x/y"},
         )
@@ -235,7 +238,7 @@ class MainTest(unittest.TestCase):
         )
         self.assertEqual(run["results"]["queue"]["accuracy"], 0.0)
         self.assertFalse(self.gepa_results.exists())
-        self.assertFalse(any(c.args[1].reasoning for c in self.complete.call_args_list))
+        self.assertFalse(any(c.args[0].reasoning for c in self.complete.call_args_list))
 
     def test_test_split_goes_through_the_cache(self):
         self.run_main("--stage", "0", "--seed", "0")
@@ -252,7 +255,7 @@ class MainTest(unittest.TestCase):
             self.run_main("--stage", "3", "--seed", "0", "--budget", "14")
             for path in self.results.glob("*.json"):
                 path.unlink()
-        calls = [c.args[1].reasoning for c in self.complete.call_args_list]
+        calls = [c.args[0].reasoning for c in self.complete.call_args_list]
         self.assertEqual(calls, [True, True])
 
     def test_same_second_runs_get_different_logs(self):

@@ -12,7 +12,8 @@ A learning project: implement GEPA (reflective prompt optimisation) from scratch
 | `gepa_toy/config.py` | Data paths, shared settings, and the only place models are named (`TASK_MODEL`, `REFLECTION_MODEL`) |
 | `gepa_toy/data_processing/` | TSV helpers, ticket formatting, near-duplicate detection |
 | `gepa_toy/zero_shot.py` | Zero-shot classification prompt and `SEED_INSTRUCTION`, the text GEPA starts from |
-| `gepa_toy/model.py` | OpenRouter call (`ModelConfig`, `classify`) and strict parsing of the JSON reply |
+| `gepa_toy/model.py` | `Model`: a model's settings plus `complete(prompt)`, the OpenRouter call. Also strict parsing of the JSON reply |
+| `gepa_toy/cache.py` | SQLite cache of replies, and `CachedModel`, which wraps a task `Model` with it. The reflection model is never cached |
 | `gepa_toy/evaluate.py` | Runs a split through the model, scores it (per-ticket `gepa_score`, per-field metrics) and saves the run. Any API error stops the run |
 | `gepa_toy/gepa.py` | The GEPA loop: `GEPA` (one run, `run()` returns the best `Candidate`, `gepa.log` holds the log), `CandidatePool` (selection logic), `Rollout`, and the reflection prompt builder and reply parser |
 | `gepa_toy/reflect.py` | The two reflection prompt templates, ours and DSPy's default |

@@ -7,10 +7,8 @@ from openai.types.chat.chat_completion import Choice
 
 from gepa_toy.model import (
     OPENROUTER_BASE_URL,
-    ModelConfig,
+    Model,
     UnexpectedResponseError,
-    classify,
-    complete,
     parse_prediction,
 )
 
@@ -61,10 +59,10 @@ def completion(choices):
 
 @patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
 @patch("gepa_toy.model.OpenAI")
-class ClassifyTest(unittest.TestCase):
+class CompleteTest(unittest.TestCase):
     def reply(self, openai, response):
         openai.return_value.chat.completions.create.return_value = response
-        return classify("prompt", ModelConfig(model="m"))
+        return parse_prediction(Model(model="m").complete("prompt"))
 
     def test_valid_reply(self, openai):
         message = ChatCompletionMessage(role="assistant", content=VALID)
@@ -77,10 +75,10 @@ class ClassifyTest(unittest.TestCase):
         message = ChatCompletionMessage(role="assistant", content="any text")
         choice = Choice(index=0, finish_reason="stop", message=message)
         openai.return_value.chat.completions.create.return_value = completion([choice])
-        self.assertEqual(complete("prompt", ModelConfig(model="m")), "any text")
+        self.assertEqual(Model(model="m").complete("prompt"), "any text")
 
     def test_sends_config_to_openrouter(self, openai):
-        model_config = ModelConfig(
+        model = Model(
             model="some/model",
             temperature=0.7,
             max_tokens=123,
@@ -92,16 +90,18 @@ class ClassifyTest(unittest.TestCase):
         create.return_value = completion(
             [Choice(index=0, finish_reason="stop", message=message)]
         )
-        classify("the prompt", model_config)
-        openai.assert_called_once_with(
-            base_url=OPENROUTER_BASE_URL, api_key="test", timeout=9.0
-        )
+        model.complete("the prompt")
+        openai.assert_called_once()
+        kwargs = openai.call_args.kwargs
+        self.assertEqual(kwargs["base_url"], OPENROUTER_BASE_URL)
+        self.assertEqual(kwargs["api_key"](), "test")
         create.assert_called_once_with(
             model="some/model",
             temperature=0.7,
             max_tokens=123,
             messages=[{"role": "user", "content": "the prompt"}],
             extra_body={"reasoning": {"enabled": True}},
+            timeout=9.0,
         )
 
     def test_empty_or_errored_reply_stops_the_run(self, openai):
@@ -145,6 +145,27 @@ class ClassifyTest(unittest.TestCase):
             with self.assertRaises(UnexpectedResponseError) as caught:
                 self.reply(openai, response)
             self.assertEqual(str(caught.exception), raw)
+
+
+class ModelTest(unittest.TestCase):
+    def test_model_builds_without_a_key_and_the_first_call_fails(self):
+        with patch.dict(os.environ, clear=True):
+            model = Model(model="m")
+            with self.assertRaises(KeyError):
+                model.complete("prompt")
+
+    def test_config_has_the_logged_shape(self):
+        # Every run's metadata logs this dict; earlier runs used these exact keys.
+        self.assertEqual(
+            Model(model="m").config,
+            {
+                "model": "m",
+                "temperature": 0.0,
+                "max_tokens": 1000,
+                "reasoning": False,
+                "timeout": 60.0,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from pathlib import Path
 from fake_openrouter import answer, chat, error, fake_openrouter
 
 from gepa_toy.dspy_task import StopOnLMError, build_program, make_lm, predict_row
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 
 ROW = {
     "id": "7",
@@ -29,7 +29,7 @@ def classify_once(handler, timeout: float = 60.0):
     """One ticket through a real dspy.LM; returns (record or exception, stop reasons, requests)."""
     stops = []
     lm = make_lm(
-        ModelConfig(model="fake/task", max_tokens=1000, timeout=timeout),
+        Model(model="fake/task", max_tokens=1000, timeout=timeout),
         [StopOnLMError(stops.append)],
     )
     with fake_openrouter(handler) as requests:

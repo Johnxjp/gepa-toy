@@ -34,7 +34,7 @@ from gepa_toy.dspy_task import (
     to_example,
 )
 from gepa_toy.evaluate import map_until_error, save_run, summarise
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.utils import git_version
 
 
@@ -89,10 +89,10 @@ def lm_usage(lm: dspy.LM) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     args, run_dir = parse_args(argv)
-    task_config = ModelConfig(model=TASK_MODEL, max_tokens=args.max_tokens)
+    task_model = Model(model=TASK_MODEL, max_tokens=args.max_tokens)
     # Reflection writes a whole instruction, so it gets room to think and some randomness:
     # each seed's run should propose different prompts.
-    reflection_config = ModelConfig(
+    reflection_model = Model(
         model=REFLECTION_MODEL,
         temperature=1.0,
         # Earlier reflections averaged ~6,100 tokens with thinking; running out of room
@@ -109,14 +109,14 @@ def main(argv: list[str] | None = None) -> None:
         "dspy_version": dspy.__version__,
         "run_dir": str(run_dir.relative_to(PROJECT_ROOT)),
         "args": vars(args),
-        "task_model": task_config.model_dump(),
-        "reflection_model": reflection_config.model_dump(),
+        "task_model": task_model.config,
+        "reflection_model": reflection_model.config,
         "minibatch_size": 5,
     }
 
     stop = [StopOnLMError(exit_run(run_dir / "stops.log"))]
-    task_lm = make_lm(task_config, stop)
-    reflection_lm = make_lm(reflection_config, stop)
+    task_lm = make_lm(task_model, stop)
+    reflection_lm = make_lm(reflection_model, stop)
     train, pareto = load_split("train"), load_split("pareto")
     eval_rows = load_split(args.eval_split)
     progress = ProgressLog(args.budget, len(eval_rows), run_dir / "progress.log")
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> None:
         "metadata": {
             **metadata,
             "data_file": str(eval_file.relative_to(PROJECT_ROOT)),
-            "model": task_config.model_dump(),
+            "model": task_model.config,
             "task_usage": lm_usage(task_lm),
             "prompt": optimised.predictors()[0].signature.instructions,
             "gepa_log": str(log_path.relative_to(PROJECT_ROOT)),

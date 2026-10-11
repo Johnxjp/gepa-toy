@@ -8,8 +8,8 @@ import argparse
 import json
 from datetime import UTC, datetime
 
-from gepa_toy import config, model
-from gepa_toy.cache import Cache
+from gepa_toy import config
+from gepa_toy.cache import Cache, CachedModel
 from gepa_toy.config import (
     CACHE_PATH,
     GEPA_RESULTS_DIR,
@@ -20,7 +20,7 @@ from gepa_toy.config import (
 from gepa_toy.data_processing.tsv import read_tsv
 from gepa_toy.evaluate import evaluate, save_run
 from gepa_toy.gepa import GEPA
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.reflect import DSPY_REFLECTION_PROMPT, REFLECTION_PROMPT
 from gepa_toy.ticket_task import TicketTask
 from gepa_toy.zero_shot import SEED_INSTRUCTION, build
@@ -44,16 +44,23 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
 
-    task_config = ModelConfig(model=args.model)
-    cache = Cache(CACHE_PATH)
+    task_model = CachedModel(Model(model=args.model), Cache(CACHE_PATH))
     best_text, best_id, log_path = SEED_INSTRUCTION, None, None
     if args.stage != "0":
         stage = STAGES[args.stage]
-        reflection_config = model.reflection_config(args.reflection_model)
-        task = TicketTask(task_config, stage["feedback"], cache, args.workers)
+        # Reasoning used 4,800 to 7,300 tokens on a real reflection prompt; 16,000 leaves room
+        # for the instruction itself. Temperature 1 so seeds explore different rewrites.
+        reflector = Model(
+            model=args.reflection_model,
+            temperature=1.0,
+            max_tokens=16000,
+            reasoning=True,
+            timeout=300.0,
+        )
+        task = TicketTask(task_model, stage["feedback"], args.workers)
         # A bad reflection model or key must crash here: inside the loop every proposal
         # failure is logged and the loop carries on until the task budget is spent.
-        model.complete("Reply with OK.", reflection_config)  # Flight test
+        reflector.complete("Reply with OK.")  # Flight test
         started = datetime.now(UTC)
         # Microseconds, like save_run: same stage and seed twice in one second would share a log.
         log_path = (
@@ -63,7 +70,7 @@ def main() -> None:
         GEPA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         gepa = GEPA(
             task,
-            reflection_config,
+            reflector,
             REFLECTION_PROMPTS[stage["reflection_prompt"]],
             log_path,
             budget=args.budget,
@@ -81,9 +88,8 @@ def main() -> None:
     run = evaluate(
         SPLITS_DIR / "test.tsv",
         lambda subject, body: build(best_text, subject, body),
-        task_config,
+        task_model,
         args.workers,
-        complete=lambda prompt, cfg: cache.complete(prompt, cfg, model.complete),
     )
     run["metadata"].update(
         stage=args.stage,

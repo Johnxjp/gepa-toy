@@ -1,6 +1,6 @@
 # Model refactor
 
-Status: notes, not yet designed. To be reviewed after the GEPA class refactor lands.
+Status: done. `Model` is a plain class: settings and one OpenAI client set up in the constructor, and a `config` property for logging. The cache went into a `CachedModel` wrapper and `classify` was deleted. Project error types are a separate step.
 
 ## Why
 

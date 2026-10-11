@@ -12,8 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-from gepa_toy import model
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.utils import git_version
 
 
@@ -143,7 +142,7 @@ class GEPA:
     def __init__(
         self,
         task: Task,
-        reflection_model: ModelConfig,
+        reflection_model: Model,
         reflection_prompt: str,
         log_path: Path,
         *,
@@ -156,7 +155,7 @@ class GEPA:
 
         Args:
             task: Evaluates a candidate on examples.
-            reflection_model: Settings for the model that proposes new instructions.
+            reflection_model: The model that proposes new instructions. Never cached.
             reflection_prompt: Template with `{instruction}` and `{rollouts}` placeholders.
             log_path: Where every `run` writes its log, overwriting the last run's file.
             budget: Task-model calls, counted as examples evaluated.
@@ -222,7 +221,7 @@ class GEPA:
                 "pareto_size": len(pareto),
                 "started": datetime.now(UTC).isoformat(),
                 "runtime_seconds": 0.0,
-                "reflection_model": self.reflection_model.model_dump(),
+                "reflection_model": self.reflection_model.config,
                 "reflection_prompt": self.reflection_prompt,
             },
             "candidates": [],
@@ -332,7 +331,7 @@ class GEPA:
         """
         prompt = build_reflection_prompt(self.reflection_prompt, parent.text, rollouts)
         iteration["reflection_prompt"] = prompt
-        reply = model.complete(prompt, self.reflection_model)
+        reply = self.reflection_model.complete(prompt)
         iteration["reflection_reply"] = reply
         return extract_instruction(reply)
 

@@ -5,14 +5,14 @@ import json
 
 from gepa_toy.config import RESULTS_DIR, SPLITS_DIR, TASK_MODEL
 from gepa_toy.evaluate import evaluate, save_run
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.zero_shot import build_expanded_prompt, build_prompt
 
 PROMPTS = {"zero_shot": build_prompt, "expanded": build_expanded_prompt}
 
 
 def main() -> None:
-    defaults = ModelConfig(model=TASK_MODEL)
+    defaults = Model(model=TASK_MODEL)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--split", default="train", choices=["train", "pareto", "test", "label_key"]
@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
 
-    model_config = ModelConfig(
+    model = Model(
         model=TASK_MODEL,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
@@ -35,7 +35,7 @@ def main() -> None:
     run = evaluate(
         SPLITS_DIR / f"{args.split}.tsv",
         PROMPTS[args.prompt],
-        model_config,
+        model,
         args.workers,
     )
     path = save_run(RESULTS_DIR, run)

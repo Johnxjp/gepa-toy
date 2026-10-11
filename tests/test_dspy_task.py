@@ -20,7 +20,7 @@ from gepa_toy.dspy_task import (
 )
 from gepa_toy.evaluate import gepa_score, labels_of
 from gepa_toy.feedback import written_feedback
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.zero_shot import SEED_INSTRUCTION
 
 ROW = {
@@ -66,11 +66,11 @@ class ExampleTest(unittest.TestCase):
 
 class ProgramTest(unittest.TestCase):
     def test_starts_from_the_seed_instruction(self):
-        program = build_program(make_lm(ModelConfig(model="m"), []))
+        program = build_program(make_lm(Model(model="m"), []))
         self.assertEqual(program.signature.instructions, SEED_INSTRUCTION)
 
     def test_lm_reaches_the_predictor(self):
-        lm = make_lm(ModelConfig(model="m"), [])
+        lm = make_lm(Model(model="m"), [])
         self.assertIs(build_program(lm).lm, lm)
 
     def test_outputs_are_the_four_fields(self):
@@ -80,7 +80,7 @@ class ProgramTest(unittest.TestCase):
 
     def test_lm_sends_the_reasoning_flag(self):
         stop = StopOnLMError(print)
-        lm = make_lm(ModelConfig(model="some/model", reasoning=False), [stop])
+        lm = make_lm(Model(model="some/model", reasoning=False), [stop])
         self.assertEqual(lm.model, "openrouter/some/model")
         self.assertEqual(lm.kwargs["extra_body"], {"reasoning": {"enabled": False}})
         self.assertEqual(lm.callbacks, [stop])
@@ -150,7 +150,7 @@ class StopOnLMErrorTest(unittest.TestCase):
 class SharedLMTest(unittest.TestCase):
     def test_program_copies_share_one_lm_and_its_history(self):
         # GEPA deep-copies the program per candidate; usage must still land on our LM.
-        lm = make_lm(ModelConfig(model="m"), [])
+        lm = make_lm(Model(model="m"), [])
         self.assertIs(copy.deepcopy(build_program(lm)).lm, lm)
 
     def test_json_mode_retry_is_off(self):

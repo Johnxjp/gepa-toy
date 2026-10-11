@@ -19,7 +19,7 @@ from dspy.utils.exceptions import AdapterParseError
 from gepa_toy.config import LABELS
 from gepa_toy.evaluate import gepa_score, labels_of
 from gepa_toy.feedback import written_feedback
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.zero_shot import SEED_INSTRUCTION
 
 # No JSON-mode retry when a reply doesn't parse: it would be an extra call the budget
@@ -138,13 +138,13 @@ def build_program(lm: dspy.LM) -> dspy.Predict:
     return program
 
 
-def make_lm(model_config: ModelConfig, callbacks: list[BaseCallback]) -> SharedLM:
+def make_lm(model: Model, callbacks: list[BaseCallback]) -> SharedLM:
     return SharedLM(
-        f"openrouter/{model_config.model}",
-        temperature=model_config.temperature,
-        max_tokens=model_config.max_tokens,
-        timeout=model_config.timeout,
-        extra_body={"reasoning": {"enabled": model_config.reasoning}},
+        f"openrouter/{model.model}",
+        temperature=model.temperature,
+        max_tokens=model.max_tokens,
+        timeout=model.timeout,
+        extra_body={"reasoning": {"enabled": model.reasoning}},
         callbacks=callbacks,
     )
 

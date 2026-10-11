@@ -5,11 +5,11 @@ from unittest.mock import patch
 
 import openai
 
-from gepa_toy.cache import Cache
+from gepa_toy.cache import Cache, CachedModel
 from gepa_toy.evaluate import labels_of
 from gepa_toy.feedback import written_feedback
 from gepa_toy.gepa import Rollout
-from gepa_toy.model import ModelConfig
+from gepa_toy.model import Model
 from gepa_toy.ticket_task import TicketTask
 from gepa_toy.zero_shot import build
 
@@ -60,22 +60,20 @@ class TicketTaskTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.cache = Cache(Path(self.tmp.name) / "cache.sqlite")
-        self.config = ModelConfig(model="test/model", temperature=0.5)
-        self.task = TicketTask(self.config, "written", self.cache, workers=2)
+        self.model = CachedModel(Model(model="test/model", temperature=0.5), self.cache)
+        self.task = TicketTask(self.model, "written", workers=2)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    @patch("gepa_toy.model.complete", return_value=REPLY)
+    @patch.object(Model, "complete", return_value=REPLY)
     def test_one_rollout_per_row_in_order_from_the_candidate(self, complete):
         rollouts = self.task.evaluate(CANDIDATE, ROWS)
         self.assertEqual(len(rollouts), 3)
         # call_args_list is appended atomically; call_count is not, across worker threads.
         self.assertEqual(
             sorted(call.args for call in complete.call_args_list),
-            sorted(
-                (build(CANDIDATE, r["subject"], r["body"]), self.config) for r in ROWS
-            ),
+            sorted((build(CANDIDATE, r["subject"], r["body"]),) for r in ROWS),
         )
         for rollout, row in zip(rollouts, ROWS, strict=True):
             self.assertIsInstance(rollout, Rollout)
@@ -101,7 +99,7 @@ class TicketTaskTest(unittest.TestCase):
             " tags [Security, Outages & Recovery]",
         )
 
-    @patch("gepa_toy.model.complete", return_value=REPLY)
+    @patch.object(Model, "complete", return_value=REPLY)
     def test_same_candidate_again_makes_no_model_calls(self, complete):
         first = self.task.evaluate(CANDIDATE, ROWS)
         second = self.task.evaluate(CANDIDATE, ROWS)
@@ -110,7 +108,7 @@ class TicketTaskTest(unittest.TestCase):
         self.task.evaluate("A different instruction.", ROWS)
         self.assertEqual(len(complete.call_args_list), 6)
 
-    @patch("gepa_toy.model.complete")
+    @patch.object(Model, "complete")
     def test_api_error_stops_and_is_not_cached(self, complete):
         complete.side_effect = openai.APIConnectionError(request=None)
         with self.assertRaises(openai.APIConnectionError):
@@ -121,7 +119,7 @@ class TicketTaskTest(unittest.TestCase):
         self.assertEqual(len(complete.call_args_list), 2)
         self.assertEqual(retried.score, 1.0)
 
-    @patch("gepa_toy.model.complete", return_value="not json")
+    @patch.object(Model, "complete", return_value="not json")
     def test_unparseable_reply_is_cached_and_scored_zero(self, complete):
         [rollout] = self.task.evaluate(CANDIDATE, ROWS[:1])
         [again] = self.task.evaluate(CANDIDATE, ROWS[:1])
@@ -130,9 +128,9 @@ class TicketTaskTest(unittest.TestCase):
         self.assertEqual(rollout.record["raw"], "not json")
         self.assertEqual(rollout, again)
 
-    @patch("gepa_toy.model.complete", return_value=REPLY)
+    @patch.object(Model, "complete", return_value=REPLY)
     def test_score_mode_feedback(self, _):
-        task = TicketTask(ModelConfig(model="m"), "score", self.cache)
+        task = TicketTask(CachedModel(Model(model="m"), self.cache), "score")
         rollouts = task.evaluate(CANDIDATE, ROWS[:2])
         self.assertEqual([r.feedback for r in rollouts], ["Score: 1.00", "Score: 0.00"])
         # The trace still carries the prediction, so the reflector has something to read.
@@ -142,13 +140,11 @@ class TicketTaskTest(unittest.TestCase):
     def test_describe(self):
         self.assertEqual(
             self.task.describe(),
-            {"model": self.config.model_dump(), "feedback": "written"},
+            {"model": self.model.config, "feedback": "written"},
         )
         self.assertEqual(self.task.describe()["model"]["model"], "test/model")
         self.assertEqual(
-            TicketTask(ModelConfig(model="m"), "score", self.cache).describe()[
-                "feedback"
-            ],
+            TicketTask(Model(model="m"), "score").describe()["feedback"],
             "score",
         )
 
