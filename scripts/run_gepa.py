@@ -19,9 +19,9 @@ from gepa_toy.config import (
 )
 from gepa_toy.data_processing.tsv import read_tsv
 from gepa_toy.evaluate import evaluate, save_run
-from gepa_toy.gepa import Settings, optimise
+from gepa_toy.gepa import GEPA
 from gepa_toy.model import ModelConfig
-from gepa_toy.reflect import DSPY_REFLECTION_PROMPT, REFLECTION_PROMPT, make_reflector
+from gepa_toy.reflect import DSPY_REFLECTION_PROMPT, REFLECTION_PROMPT
 from gepa_toy.ticket_task import TicketTask
 from gepa_toy.zero_shot import SEED_INSTRUCTION, build
 
@@ -54,13 +54,6 @@ def main() -> None:
         # A bad reflection model or key must crash here: inside the loop every proposal
         # failure is logged and the loop carries on until the task budget is spent.
         model.complete("Reply with OK.", reflection_config)  # Flight test
-        propose = make_reflector(
-            lambda prompt: model.complete(prompt, reflection_config),
-            REFLECTION_PROMPTS[stage["reflection_prompt"]],
-        )
-        settings = Settings(
-            args.budget, minibatch_size=5, selection=stage["selection"], seed=args.seed
-        )
         started = datetime.now(UTC)
         # Microseconds, like save_run: same stage and seed twice in one second would share a log.
         log_path = (
@@ -68,23 +61,22 @@ def main() -> None:
             / f"{started:%Y%m%d-%H%M%S-%f}_stage{args.stage}_seed{args.seed}.json"
         )
         GEPA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        log = optimise(
+        gepa = GEPA(
+            task,
+            reflection_config,
+            REFLECTION_PROMPTS[stage["reflection_prompt"]],
+            log_path,
+            budget=args.budget,
+            minibatch_size=5,
+            selection=stage["selection"],
+            seed=args.seed,
+        )
+        best = gepa.run(
             SEED_INSTRUCTION,
             read_tsv(SPLITS_DIR / "train.tsv"),
             read_tsv(SPLITS_DIR / "pareto.tsv"),
-            task,
-            propose,
-            settings,
-            log_path,
-            metadata={
-                "stage": args.stage,
-                "seed": args.seed,
-                "reflection_model": reflection_config.model_dump(),
-                "reflection_prompt": stage["reflection_prompt"],
-            },
         )
-        best_id = log["best"]
-        best_text = log["candidates"][best_id]["text"]
+        best_text, best_id = best.text, best.id
 
     run = evaluate(
         SPLITS_DIR / "test.tsv",

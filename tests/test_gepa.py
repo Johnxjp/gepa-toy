@@ -1,23 +1,21 @@
 import json
 import math
 import random
+import re
 import tempfile
 import unittest
 from collections import Counter
+from dataclasses import asdict
+from itertools import islice
 from pathlib import Path
 from unittest.mock import patch
 
-from gepa_toy.gepa import (
-    Rollout,
-    Settings,
-    add_candidate,
-    best_candidate,
-    optimise,
-    pareto_front,
-    select_parent,
-)
+from gepa_toy.gepa import GEPA, Candidate, CandidatePool, Rollout, shuffled_positions
+from gepa_toy.model import ModelConfig
 
 GIT = {"commit": "test", "dirty": False, "changes": []}
+TEMPLATE = "{instruction}\n---\n{rollouts}"
+REFLECTION_MODEL = ModelConfig(model="fake/reflector", temperature=1.0, reasoning=True)
 
 
 class FakeTask:
@@ -33,7 +31,7 @@ class FakeTask:
             Rollout(
                 score=self.score(candidate, e),
                 trace=str(e),
-                feedback=f"missing {e}",
+                feedback=f"missing {e}" if self.score(candidate, e) < 1 else f"ok {e}",
                 record={"example": e},
             )
             for e in examples
@@ -84,21 +82,27 @@ class CountingPropose:
         return self.propose(parent, rollouts)
 
 
-class RecordingPropose:
-    """Like make_reflector's propose: keeps the last prompt and reply, even when it raises."""
+def fake_reflection(propose):
+    """A stand-in for model.complete: parse the prompt back into the parent text and the
+    rollouts, call propose(parent, rollouts) and put the result in a fenced block.
 
-    def __init__(self, fail_first):
-        self.fail_first = fail_first
-        self.last_prompt = self.last_reply = None
+    Rollout scores are not in the prompt, so they are read from the feedback ("missing
+    ..." means a score below 1). A result starting "NOFENCE:" is returned as the bare reply.
+    """
 
-    def __call__(self, parent, rollouts):
-        self.last_prompt = self.last_reply = None
-        self.last_prompt = f"prompt for {parent!r}"
-        if self.fail_first:
-            self.fail_first = False
-            raise ValueError("no fenced block")
-        self.last_reply = f"reply for {parent!r}"
-        return add_keyword(parent, rollouts)
+    def complete(prompt, model_config):
+        parent, examples = prompt.split("\n---\n", 1)
+        rollouts = []
+        for block in re.split(r"\n\n(?=Example \d+\n)", examples):
+            _, trace, feedback = block.split("\n")
+            score = 0.0 if feedback.startswith("missing") else 1.0
+            rollouts.append(Rollout(score, trace, feedback, {}))
+        result = propose(parent, rollouts)
+        if result.startswith("NOFENCE:"):
+            return result.removeprefix("NOFENCE:")
+        return f"Thinking...\n```\n{result}\n```\n"
+
+    return complete
 
 
 class GepaTest(unittest.TestCase):
@@ -110,9 +114,16 @@ class GepaTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def make_gepa(self, task, **settings):
+        settings.setdefault("selection", "best")
+        return GEPA(task, REFLECTION_MODEL, TEMPLATE, self.log_path, **settings)
+
     def optimise(self, task, propose, train, pareto, **settings):
-        settings = Settings(selection="best", **settings)
-        return optimise("", train, pareto, task, propose, settings, self.log_path)
+        """Run GEPA with the fake reflection model; return the log. Keeps the GEPA as self.gepa."""
+        self.gepa = self.make_gepa(task, **settings)
+        with patch("gepa_toy.model.complete", fake_reflection(propose)):
+            self.best = self.gepa.run("", train, pareto)
+        return self.gepa.log
 
     def test_budget_never_exceeded_wherever_it_lands(self):
         pareto = ["p1", "p2", "p3"]
@@ -226,17 +237,15 @@ class GepaTest(unittest.TestCase):
         for selection, seeds_with_gamma_parent in gamma_parents.items():
             for seed in range(16):
                 with self.subTest(selection=selection, seed=seed):
-                    settings = Settings(
-                        budget=150, minibatch_size=2, selection=selection, seed=seed
-                    )
-                    log = optimise(
-                        "",
-                        train,
-                        pareto,
+                    log = self.optimise(
                         FakeTask(keyword_score),
                         add_keyword,
-                        settings,
-                        self.log_path,
+                        train,
+                        pareto,
+                        budget=150,
+                        minibatch_size=2,
+                        selection=selection,
+                        seed=seed,
                     )
                     candidates = log["candidates"]
                     best = candidates[log["best"]]
@@ -253,7 +262,8 @@ class GepaTest(unittest.TestCase):
                                 for c in candidates
                                 if c["iteration"] is None or c["iteration"] < n
                             ]
-                            self.assertIs(parent, best_candidate(pool))
+                            expected = max(pool, key=lambda c: c["mean_pareto_score"])
+                            self.assertEqual(parent["id"], expected["id"])
                     self.assertTrue(
                         any("gamma" in c["text"].split() for c in candidates)
                     )
@@ -267,17 +277,15 @@ class GepaTest(unittest.TestCase):
         pareto = ["alpha", "beta|gamma", "!gamma"]
         logs = []
         for _ in range(2):
-            settings = Settings(
-                budget=100, minibatch_size=2, selection="pareto", seed=4
-            )
-            log = optimise(
-                "",
-                train,
-                pareto,
+            log = self.optimise(
                 FakeTask(keyword_score),
                 add_keyword,
-                settings,
-                self.log_path,
+                train,
+                pareto,
+                budget=100,
+                minibatch_size=2,
+                selection="pareto",
+                seed=4,
             )
             del log["metadata"]["started"], log["metadata"]["runtime_seconds"]
             logs.append(log)
@@ -320,7 +328,7 @@ class GepaTest(unittest.TestCase):
         seen = []
 
         def propose(parent, rollouts):
-            seen.append([r.record["example"] for r in rollouts])
+            seen.append([r.trace for r in rollouts])
             return parent + "x"
 
         train = ["t1", "t2", "t3"]
@@ -403,25 +411,6 @@ class GepaTest(unittest.TestCase):
         self.assertEqual(log["iterations"][1]["outcome"], "accepted")
 
     def test_reflection_prompt_and_reply_are_logged(self):
-        train = ["alpha", "beta", "gamma", "delta"]
-        task = FakeTask(keyword_score)
-        log = self.optimise(
-            task,
-            RecordingPropose(fail_first=True),
-            train,
-            ["alpha"],
-            budget=12,
-            minibatch_size=2,
-        )
-        failed, succeeded = log["iterations"][:2]
-        self.assertEqual(failed["outcome"], "proposal failed")
-        self.assertEqual(failed["reflection_prompt"], "prompt for ''")
-        self.assertIsNone(failed["reflection_reply"])
-        self.assertEqual(succeeded["outcome"], "accepted")
-        self.assertEqual(succeeded["reflection_prompt"], "prompt for ''")
-        self.assertEqual(succeeded["reflection_reply"], "reply for ''")
-
-    def test_propose_without_the_attributes_logs_none(self):
         log = self.optimise(
             FakeTask(keyword_score),
             add_keyword,
@@ -432,8 +421,166 @@ class GepaTest(unittest.TestCase):
         )
         first = log["iterations"][0]
         self.assertEqual(first["outcome"], "accepted")
+        self.assertEqual(
+            first["reflection_prompt"],
+            "\n---\nExample 1\nalpha\nmissing alpha\n\nExample 2\nbeta\nmissing beta",
+        )
+        self.assertEqual(first["reflection_reply"], "Thinking...\n```\nalpha\n```\n")
+
+    def test_skipped_iteration_logs_no_reflection(self):
+        log = self.optimise(
+            FakeTask(lambda candidate, example: 1.0),
+            append_x,
+            ["t1", "t2"],
+            ["p1"],
+            budget=5,
+            minibatch_size=2,
+        )
+        first = log["iterations"][0]
+        self.assertEqual(first["outcome"], "skipped")
         self.assertIsNone(first["reflection_prompt"])
         self.assertIsNone(first["reflection_reply"])
+
+    def test_failed_reflection_call_logs_the_prompt_and_no_reply(self):
+        def failing(parent, rollouts):
+            raise RuntimeError("api down")
+
+        log = self.optimise(
+            FakeTask(keyword_score),
+            failing,
+            ["alpha", "beta", "gamma"],
+            ["alpha"],
+            budget=12,
+            minibatch_size=2,
+        )
+        self.assertGreater(len(log["iterations"]), 1)
+        for iteration in log["iterations"]:
+            self.assertEqual(iteration["outcome"], "proposal failed")
+            self.assertEqual(iteration["error"], "RuntimeError: api down")
+            self.assertTrue(
+                iteration["reflection_prompt"].startswith("\n---\nExample 1")
+            )
+            self.assertIsNone(iteration["reflection_reply"])
+
+    def test_reply_without_a_fenced_block_logs_prompt_and_reply(self):
+        log = self.optimise(
+            FakeTask(keyword_score),
+            lambda parent, rollouts: "NOFENCE:just say alpha",
+            ["alpha", "beta"],
+            ["alpha"],
+            budget=8,
+            minibatch_size=2,
+        )
+        first = log["iterations"][0]
+        self.assertEqual(first["outcome"], "proposal failed")
+        self.assertTrue(first["error"].startswith("ValueError: No fenced code block"))
+        self.assertIn("Example 1", first["reflection_prompt"])
+        self.assertEqual(first["reflection_reply"], "just say alpha")
+
+    def test_reflection_model_gets_the_configured_model(self):
+        complete = fake_reflection(add_keyword)
+        calls = []
+
+        def recording(prompt, model_config):
+            calls.append(model_config)
+            return complete(prompt, model_config)
+
+        gepa = self.make_gepa(FakeTask(keyword_score), budget=8, minibatch_size=2)
+        with patch("gepa_toy.model.complete", recording):
+            gepa.run("", ["alpha", "beta"], ["alpha"])
+        self.assertEqual(calls, [REFLECTION_MODEL] * len(calls))
+        self.assertTrue(calls)
+
+    def test_run_returns_the_best_candidate(self):
+        train = ["alpha", "beta", "gamma", "delta"]
+        pareto = ["alpha", "beta", "gamma", "!delta"]
+        log = self.optimise(
+            FakeTask(keyword_score),
+            add_keyword,
+            train,
+            pareto,
+            budget=80,
+            minibatch_size=2,
+        )
+        top = max(c["mean_pareto_score"] for c in log["candidates"])
+        self.assertEqual(self.best.mean_pareto_score, top)
+        self.assertEqual(self.best.id, log["best"])
+        self.assertIs(self.best, self.gepa.pool.best())
+        self.assertGreater(len(log["candidates"]), 1)
+
+    def test_run_twice_gives_two_runs_and_the_second_overwrites_the_file(self):
+        train = ["alpha", "beta", "gamma", "delta"]
+        pareto = ["alpha", "beta|gamma", "!gamma"]
+        task = FakeTask(keyword_score)
+        gepa = self.make_gepa(task, budget=100, minibatch_size=2, seed=4)
+        logs, pools = [], []
+        with patch("gepa_toy.model.complete", fake_reflection(add_keyword)):
+            for _ in range(2):
+                gepa.run("", train, pareto)
+                logs.append(gepa.log)
+                pools.append(gepa.pool)
+        self.assertIsNot(logs[0], logs[1])
+        self.assertIsNot(pools[0], pools[1])
+        # The budget restarts with each run.
+        self.assertEqual(task.calls_used, 2 * logs[0]["iterations"][-1]["calls_used"])
+        for log in logs:
+            del log["metadata"]["started"], log["metadata"]["runtime_seconds"]
+        self.assertEqual(logs[0], logs[1])
+        on_disk = json.loads(self.log_path.read_text())
+        del on_disk["metadata"]["started"], on_disk["metadata"]["runtime_seconds"]
+        self.assertEqual(on_disk, logs[1])
+
+    def test_log_metadata_has_the_reflection_model_and_full_template(self):
+        log = self.optimise(
+            FakeTask(keyword_score),
+            add_keyword,
+            ["alpha", "beta"],
+            ["alpha"],
+            budget=8,
+            minibatch_size=2,
+            seed=5,
+        )
+        metadata = log["metadata"]
+        self.assertEqual(metadata["reflection_model"], REFLECTION_MODEL.model_dump())
+        self.assertEqual(metadata["reflection_prompt"], TEMPLATE)
+        self.assertEqual(
+            metadata["settings"],
+            {"budget": 8, "minibatch_size": 2, "selection": "best", "seed": 5},
+        )
+        self.assertNotIn("seed", metadata)
+        self.assertNotIn("stage", metadata)
+
+    def test_log_file_equals_the_log_on_the_instance(self):
+        log = self.optimise(
+            FakeTask(keyword_score),
+            add_keyword,
+            ["alpha", "beta"],
+            ["alpha"],
+            budget=8,
+            minibatch_size=2,
+        )
+        self.assertEqual(json.loads(self.log_path.read_text()), log)
+
+    def test_candidates_are_logged_with_the_same_keys_in_order(self):
+        log = self.optimise(
+            FakeTask(keyword_score),
+            add_keyword,
+            ["alpha", "beta"],
+            ["alpha"],
+            budget=8,
+            minibatch_size=2,
+        )
+        self.assertEqual(
+            list(log["candidates"][0]),
+            [
+                "id",
+                "text",
+                "parent",
+                "iteration",
+                "pareto_scores",
+                "mean_pareto_score",
+            ],
+        )
 
     def test_same_seed_gives_identical_log(self):
         train = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
@@ -453,6 +600,24 @@ class GepaTest(unittest.TestCase):
         for log in logs:
             del log["metadata"]["started"], log["metadata"]["runtime_seconds"]
         self.assertEqual(logs[0], logs[1])
+
+    def test_parent_is_drawn_before_the_minibatch(self):
+        # rng.choices draws even when the front has one candidate and shuffled_positions is
+        # lazy, so swapping the two calls changes every minibatch of every run.
+        rng = random.Random(3)
+        rng.choices([0], weights=[1])
+        expected = list(islice(shuffled_positions(6, rng), 2))
+        log = self.optimise(
+            FakeTask(lambda c, e: 0.5),
+            append_x,
+            [f"t{i}" for i in range(6)],
+            ["p1"],
+            budget=10,
+            minibatch_size=2,
+            selection="pareto",
+            seed=3,
+        )
+        self.assertEqual(log["iterations"][0]["minibatch"], expected)
 
     def test_different_seeds_give_different_minibatch_orders(self):
         train = [f"t{i}" for i in range(10)]
@@ -553,12 +718,6 @@ class GepaTest(unittest.TestCase):
         for c in candidates[1:]:
             self.assertIn(c["parent"], ids)
             self.assertEqual(log["iterations"][c["iteration"]]["child"], c["id"])
-        for j in range(len(pareto)):
-            top = max(c["pareto_scores"][j] for c in candidates)
-            winners = [c["id"] for c in candidates if c["pareto_scores"][j] == top]
-            self.assertEqual(
-                winners, [c["id"] for c in candidates if j in c["pareto_wins"]]
-            )
         best = max(candidates, key=lambda c: c["mean_pareto_score"])
         self.assertEqual(log["best"], best["id"])
         self.assertEqual(log["metadata"]["settings"]["selection"], "best")
@@ -585,45 +744,71 @@ class GepaTest(unittest.TestCase):
 
 
 def candidates_from(rows):
-    """One candidate per row of pareto scores, ids in row order."""
-    candidates = []
+    """A pool with one candidate per row of pareto scores, ids in row order."""
+    pool = CandidatePool()
     for row in rows:
-        rollouts = [Rollout(score=s, trace="", feedback="", record={}) for s in row]
-        add_candidate(candidates, str(len(candidates)), None, None, rollouts)
-    return candidates
+        pool.add(str(len(pool.candidates)), None, None, row)
+    return pool
 
 
-def draws(candidates, n=3000, seed=0):
+def draws(pool, n=3000, seed=0):
     """How often select_parent picks each id over n pareto selections."""
     rng = random.Random(seed)
-    settings = Settings(budget=1, selection="pareto")
-    return Counter(select_parent(candidates, settings, rng)["id"] for _ in range(n))
+    return Counter(pool.select_parent("pareto", rng).id for _ in range(n))
 
 
 class ParetoSelectionTest(unittest.TestCase):
+    def test_add_assigns_ids_and_stores_the_mean(self):
+        pool = CandidatePool()
+        seed = pool.add("seed", None, None, [1, 0, 0.5])
+        child = pool.add("child", 0, 3, [0, 0, 0])
+        self.assertEqual((seed.id, child.id), (0, 1))
+        self.assertEqual((child.parent, child.iteration), (0, 3))
+        self.assertEqual(seed.mean_pareto_score, 0.5)
+        self.assertEqual(list(asdict(seed)), list(asdict(child)))
+
+    def test_wins_follow_later_candidates(self):
+        pool = candidates_from([[1, 0, 0.5]])
+        self.assertEqual(pool.wins(), {0: {0, 1, 2}})
+        # The child ties the seed on example 1 and beats it on example 2.
+        pool.add("child", 0, 0, [0, 0, 1])
+        self.assertEqual(pool.wins(), {0: {0, 1}, 1: {1, 2}})
+
+    def test_mean_is_derived_from_the_scores_and_cannot_be_passed(self):
+        candidate = Candidate(0, "x", None, None, [1, 0, 0.5])
+        self.assertEqual(candidate.mean_pareto_score, 0.5)
+        with self.assertRaises(TypeError):
+            Candidate(0, "x", None, None, [1], mean_pareto_score=1.0)
+
+    def test_best_selection_takes_the_top_mean_and_leaves_the_rng_alone(self):
+        pool = candidates_from([[1, 0, 0], [0, 1, 1], [0, 1, 1]])
+        rng = random.Random(0)
+        self.assertIs(pool.select_parent("best", rng), pool.candidates[1])
+        self.assertEqual(rng.random(), random.Random(0).random())
+
     def test_winners_per_example_include_ties(self):
-        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
-        self.assertEqual([c["pareto_wins"] for c in candidates], [[0], [0, 1], [2]])
+        pool = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
+        self.assertEqual(pool.wins(), {0: {0}, 1: {0, 1}, 2: {2}})
 
     def test_weights_equal_win_counts_and_sampling_matches(self):
-        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
-        front = pareto_front(candidates)
-        self.assertEqual([c["id"] for c in front], [1, 2])
-        self.assertEqual([len(c["pareto_wins"]) for c in front], [2, 1])
-        counts = draws(candidates, n=3000)
+        pool = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
+        front = pool.pareto_front()
+        self.assertEqual([c.id for c in front], [1, 2])
+        self.assertEqual([len(pool.wins()[c.id]) for c in front], [2, 1])
+        counts = draws(pool, n=3000)
         self.assertEqual(set(counts), {1, 2})
         self.assertAlmostEqual(counts[1] / 3000, 2 / 3, delta=0.05)
         self.assertAlmostEqual(counts[2] / 3000, 1 / 3, delta=0.05)
 
     def test_candidate_that_wins_nothing_is_never_picked(self):
-        candidates = candidates_from([[1, 0.5], [0.5, 0]])
-        self.assertEqual(candidates[1]["pareto_wins"], [])
-        self.assertEqual(set(draws(candidates)), {0})
+        pool = candidates_from([[1, 0.5], [0.5, 0]])
+        self.assertEqual(pool.wins()[1], set())
+        self.assertEqual(set(draws(pool)), {0})
 
     def test_subset_win_set_is_never_picked(self):
-        candidates = candidates_from([[1, 0, 0], [1, 1, 0], [0, 0, 1]])
-        self.assertEqual(candidates[0]["pareto_wins"], [0])
-        self.assertNotIn(0, draws(candidates))
+        pool = candidates_from([[1, 0, 0], [1, 1, 0], [0, 0, 1]])
+        self.assertEqual(pool.wins()[0], {0})
+        self.assertNotIn(0, draws(pool))
 
     def test_same_win_set_only_the_higher_mean_can_be_picked(self):
         for rows, weaker in (
@@ -631,59 +816,54 @@ class ParetoSelectionTest(unittest.TestCase):
             ([[1, 1, 0.5], [1, 1, 0], [0, 0, 1]], 1),
         ):
             with self.subTest(weaker=weaker):
-                candidates = candidates_from(rows)
-                self.assertEqual(
-                    candidates[0]["pareto_wins"], candidates[1]["pareto_wins"]
-                )
-                counts = draws(candidates)
+                pool = candidates_from(rows)
+                self.assertEqual(pool.wins()[0], pool.wins()[1])
+                counts = draws(pool)
                 self.assertNotIn(weaker, counts)
                 self.assertEqual(set(counts), {1 - weaker, 2})
 
     def test_wins_include_ties_that_differ_only_by_float_rounding(self):
         # Real gepa_scores for the same result can come out one ulp apart.
         tie = [0.7, math.nextafter(0.7, 1)]
-        candidates = candidates_from([[tie[0], 1], [tie[1], 0]])
-        self.assertEqual([c["pareto_wins"] for c in candidates], [[0, 1], [0]])
+        pool = candidates_from([[tie[0], 1], [tie[1], 0]])
+        self.assertEqual(pool.wins(), {0: {0, 1}, 1: {0}})
 
     def test_equal_mean_and_identical_wins_keeps_the_later_candidate(self):
-        candidates = candidates_from([[1, 1, 0], [1, 1, 0]])
-        self.assertEqual([c["id"] for c in pareto_front(candidates)], [1])
-        self.assertIs(best_candidate(candidates), candidates[0])
+        pool = candidates_from([[1, 1, 0], [1, 1, 0]])
+        self.assertEqual([c.id for c in pool.pareto_front()], [1])
+        self.assertIs(pool.best(), pool.candidates[0])
 
     def test_unique_win_survives_whatever_its_mean(self):
-        candidates = candidates_from([[1, 1, 1, 0], [0, 0, 0, 1]])
-        counts = draws(candidates)
+        pool = candidates_from([[1, 1, 1, 0], [0, 0, 0, 1]])
+        counts = draws(pool)
         self.assertEqual(set(counts), {0, 1})
         self.assertAlmostEqual(counts[1] / 3000, 1 / 4, delta=0.05)
 
     def test_wins_covered_by_several_candidates_together_are_dominated(self):
         # Candidate 2 has the lowest mean and no single candidate covers its wins {0, 1},
         # but 0 and 1 together do, so the reference rule drops it.
-        candidates = candidates_from([[1, 0, 1, 0.2], [0, 1, 0.2, 1], [1, 1, 0, 0]])
-        self.assertEqual(candidates[2]["pareto_wins"], [0, 1])
-        self.assertEqual([c["id"] for c in pareto_front(candidates)], [0, 1])
+        pool = candidates_from([[1, 0, 1, 0.2], [0, 1, 0.2, 1], [1, 1, 0, 0]])
+        self.assertEqual(pool.wins()[2], {0, 1})
+        self.assertEqual([c.id for c in pool.pareto_front()], [0, 1])
 
     def test_a_dropped_candidate_no_longer_covers_later_ones(self):
         # Ascending by mean: 0 is dropped first (covered by 1 and 2), after which 1 is the
         # only winner of example 0 left and must stay. Dropping both would leave
         # example 0 with no winner in the front.
-        candidates = candidates_from([[1, 0.5, 0], [1, 0, 1], [0, 1, 1]])
-        self.assertEqual([c["id"] for c in pareto_front(candidates)], [1, 2])
+        pool = candidates_from([[1, 0.5, 0], [1, 0, 1], [0, 1, 1]])
+        self.assertEqual([c.id for c in pool.pareto_front()], [1, 2])
 
     def test_dominated_candidate_with_highest_mean_is_still_the_final_pick(self):
-        candidates = candidates_from([[1, 0.9, 0.9], [1, 1, 0], [0, 0, 1]])
-        self.assertIs(best_candidate(candidates), candidates[0])
-        self.assertNotIn(0, draws(candidates))
+        pool = candidates_from([[1, 0.9, 0.9], [1, 1, 0], [0, 0, 1]])
+        self.assertIs(pool.best(), pool.candidates[0])
+        self.assertNotIn(0, draws(pool))
 
     def test_same_seed_gives_the_same_picks(self):
-        candidates = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
-        settings = Settings(budget=1, selection="pareto")
+        pool = candidates_from([[1, 0, 0.5], [1, 1, 0], [0, 0, 1]])
         picks = []
         for _ in range(2):
             rng = random.Random(7)
-            picks.append(
-                [select_parent(candidates, settings, rng)["id"] for _ in range(50)]
-            )
+            picks.append([pool.select_parent("pareto", rng).id for _ in range(50)])
         self.assertEqual(picks[0], picks[1])
         self.assertEqual(set(picks[0]), {1, 2})
 

@@ -155,12 +155,12 @@ class MainTest(unittest.TestCase):
         self.assertEqual(log_path.name[22:], "_stage3_seed7.json")
 
         log = json.loads(log_path.read_text())
-        self.assertEqual(log["metadata"]["stage"], "3")
-        self.assertEqual(log["metadata"]["seed"], 7)
+        self.assertNotIn("stage", log["metadata"])
+        self.assertNotIn("seed", log["metadata"])
         self.assertEqual(log["metadata"]["settings"]["seed"], 7)
         self.assertEqual(log["metadata"]["settings"]["budget"], 14)
         self.assertEqual(log["metadata"]["settings"]["minibatch_size"], 5)
-        self.assertEqual(log["metadata"]["reflection_prompt"], "ours")
+        self.assertEqual(log["metadata"]["reflection_prompt"], REFLECTION_PROMPT)
         self.assertEqual(
             log["metadata"]["reflection_model"],
             {
@@ -199,11 +199,9 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(
                     log["metadata"]["settings"]["selection"], switches["selection"]
                 )
-                self.assertEqual(
-                    log["metadata"]["reflection_prompt"], switches["reflection_prompt"]
-                )
-                sent = log["iterations"][0]["reflection_prompt"]
                 template = run_gepa.REFLECTION_PROMPTS[switches["reflection_prompt"]]
+                self.assertEqual(log["metadata"]["reflection_prompt"], template)
+                sent = log["iterations"][0]["reflection_prompt"]
                 self.assertTrue(sent.startswith(template.split("{instruction}")[0]))
                 for path in self.results.glob("*.json"):
                     path.unlink()
@@ -224,9 +222,9 @@ class MainTest(unittest.TestCase):
         )
 
     def test_stage_0_scores_the_seed_without_optimising(self):
-        with patch.object(run_gepa, "optimise") as optimise:
+        with patch.object(run_gepa, "GEPA") as gepa:
             run = self.run_main("--stage", "0", "--seed", "1")
-        optimise.assert_not_called()
+        gepa.assert_not_called()
         meta = run["metadata"]
         self.assertEqual(meta["stage"], "0")
         self.assertEqual(meta["seed"], 1)
