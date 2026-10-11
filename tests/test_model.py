@@ -8,6 +8,7 @@ from openai.types.chat.chat_completion import Choice
 from gepa_toy.model import (
     OPENROUTER_BASE_URL,
     ModelConfig,
+    UnexpectedResponseError,
     classify,
     parse_prediction,
 )
@@ -62,7 +63,7 @@ def completion(choices):
 class ClassifyTest(unittest.TestCase):
     def reply(self, openai, response):
         openai.return_value.chat.completions.create.return_value = response
-        return classify("prompt", ModelConfig())
+        return classify("prompt", ModelConfig(model="m"))
 
     def test_valid_reply(self, openai):
         message = ChatCompletionMessage(role="assistant", content=VALID)
@@ -79,7 +80,10 @@ class ClassifyTest(unittest.TestCase):
             reasoning=True,
         )
         create = openai.return_value.chat.completions.create
-        create.return_value = completion([])
+        message = ChatCompletionMessage(role="assistant", content=VALID)
+        create.return_value = completion(
+            [Choice(index=0, finish_reason="stop", message=message)]
+        )
         classify("the prompt", model_config)
         openai.assert_called_once_with(
             base_url=OPENROUTER_BASE_URL, api_key="test", timeout=9.0
@@ -92,30 +96,37 @@ class ClassifyTest(unittest.TestCase):
             extra_body={"reasoning": {"enabled": True}},
         )
 
-    def test_empty_content_is_an_error(self, openai):
-        message = ChatCompletionMessage(role="assistant", content=None)
+    def test_empty_or_errored_reply_stops_the_run(self, openai):
+        # OpenRouter reports a provider failing after the request was accepted as a 200
+        # with finish_reason "error"; a reply with no text is treated the same way.
+        for content, finish in ((None, "length"), ("", "stop"), (VALID, "error")):
+            message = ChatCompletionMessage(role="assistant", content=content)
+            choice = Choice.construct(index=0, finish_reason=finish, message=message)
+            with self.assertRaises(UnexpectedResponseError):
+                self.reply(openai, completion([choice]))
+
+    def test_reply_cut_off_part_way_is_a_model_mistake(self, openai):
+        message = ChatCompletionMessage(role="assistant", content='{"queue": "IT Sup')
         choice = Choice(index=0, finish_reason="length", message=message)
         result = self.reply(openai, completion([choice]))
         self.assertIsNone(result.prediction)
         self.assertEqual(result.error, "no JSON object in response")
 
-    def test_no_choices_is_an_error(self, openai):
+    def test_no_choices_stops_the_run(self, openai):
         for choices in ([], None):
-            result = self.reply(openai, completion(choices))
-            self.assertIsNone(result.prediction)
-            self.assertEqual(result.error, "unexpected response shape")
-            self.assertIn('"id":"x"', result.raw)
+            with self.assertRaises(UnexpectedResponseError) as caught:
+                self.reply(openai, completion(choices))
+            self.assertIn('"id":"x"', str(caught.exception))
 
-    def test_non_json_or_null_body_is_an_error(self, openai):
+    def test_non_json_or_null_body_stops_the_run(self, openai):
         # The SDK returns the body as a str for non-JSON content types, and None for `null`.
         for response, raw in (
             ("<html>Bad gateway</html>", "<html>Bad gateway</html>"),
             (None, "None"),
         ):
-            result = self.reply(openai, response)
-            self.assertIsNone(result.prediction)
-            self.assertEqual(result.error, "unexpected response shape")
-            self.assertEqual(result.raw, raw)
+            with self.assertRaises(UnexpectedResponseError) as caught:
+                self.reply(openai, response)
+            self.assertEqual(str(caught.exception), raw)
 
 
 if __name__ == "__main__":

@@ -16,13 +16,17 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class ModelConfig(BaseModel):
-    model: str = "nvidia/nemotron-3.5-lightning:free"
+    model: str
     temperature: float = 0.0
     max_tokens: int = 300
     # Off for the task model: on, Nemotron spends ~1,300 tokens and ~40s per ticket thinking.
     reasoning: bool = False
     # The SDK default is 600s, retried twice: one hung call could stall a worker for 30 minutes.
     timeout: float = 60.0
+
+
+class UnexpectedResponseError(Exception):
+    """A 200 reply with no usable answer: an API failure, not a model mistake."""
 
 
 class Prediction(BaseModel):
@@ -64,12 +68,19 @@ def classify(prompt: str, model_config: ModelConfig) -> Result:
         extra_body={"reasoning": {"enabled": model_config.reasoning}},
     )
     # OpenRouter can return 200 with an error body and no choices when the upstream provider
-    # fails, and the SDK hands back a plain str or None for non-JSON or null bodies.
-    if not isinstance(response, ChatCompletion) or not response.choices:
+    # fails, or a choice with finish_reason "error" and no content. The SDK hands back a
+    # plain str or None for non-JSON or null bodies. An empty reply counts as one of these:
+    # a reply cut off part-way still has text and is scored as a model mistake.
+    if (
+        not isinstance(response, ChatCompletion)
+        or not response.choices
+        or response.choices[0].finish_reason == "error"
+        or not response.choices[0].message.content
+    ):
         raw = (
             response.model_dump_json()
             if isinstance(response, ChatCompletion)
             else str(response)
         )
-        return Result(prediction=None, raw=raw, error="unexpected response shape")
-    return parse_prediction(response.choices[0].message.content or "")
+        raise UnexpectedResponseError(raw)
+    return parse_prediction(response.choices[0].message.content)

@@ -5,25 +5,16 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
-import openai
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 from gepa_toy.config import PROJECT_ROOT
 from gepa_toy.data_processing.tsv import read_tsv
-from gepa_toy.model import ModelConfig, Result, classify
+from gepa_toy.model import ModelConfig, classify
 from gepa_toy.utils import git_version
 
 SINGLE_FIELDS = ("queue", "type", "priority")
 # Stands in for a failed prediction so it counts as wrong for every class.
 NO_PREDICTION = "(none)"
-# Still failing after the SDK's own retries: recorded so one flaky ticket doesn't sink a run.
-# Anything else (bad key 401, unknown model 404, bad request 400) is a setup bug and must
-# crash, or the run is saved with every ticket scored 0 and looks like a real result.
-TRANSIENT_ERRORS = (
-    openai.APIConnectionError,
-    openai.RateLimitError,
-    openai.InternalServerError,
-)
 
 
 def labels_of(row: dict[str, str]) -> dict:
@@ -67,11 +58,9 @@ def gepa_score(predicted: dict | None, labels: dict) -> float:
 def predict(
     row: dict[str, str], build_prompt: Callable, model_config: ModelConfig
 ) -> dict:
-    prompt = build_prompt(row["subject"], row["body"])
-    try:
-        result = classify(prompt, model_config)
-    except TRANSIENT_ERRORS as e:
-        result = Result(prediction=None, raw="", error=f"API error: {e}")
+    # API errors propagate and stop the run (docs/ticket_scoring.md section 5). Only a
+    # reply the model got wrong is recorded, as `error`.
+    result = classify(build_prompt(row["subject"], row["body"]), model_config)
     predicted = result.prediction.model_dump() if result.prediction else None
     labels = labels_of(row)
     return {
@@ -127,6 +116,15 @@ def summarise(predictions: list[dict]) -> dict:
     }
 
 
+def map_until_error(fn: Callable, items: list, workers: int) -> list:
+    """`fn` over `items` in parallel; the first exception cancels every call not yet started."""
+    pool = ThreadPoolExecutor(workers)
+    try:
+        return list(pool.map(fn, items))
+    finally:
+        pool.shutdown(cancel_futures=True)
+
+
 def evaluate(
     data_file: Path,
     build_prompt: Callable,
@@ -143,10 +141,9 @@ def evaluate(
     }
     start = time.monotonic()
     rows = read_tsv(data_file)
-    with ThreadPoolExecutor(workers) as pool:
-        predictions = list(
-            pool.map(lambda r: predict(r, build_prompt, model_config), rows)
-        )
+    predictions = map_until_error(
+        lambda r: predict(r, build_prompt, model_config), rows, workers
+    )
     metadata["runtime_seconds"] = round(time.monotonic() - start, 2)
     return {
         "metadata": metadata,

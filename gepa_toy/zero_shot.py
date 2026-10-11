@@ -36,6 +36,22 @@ def _options(values, descriptions=None):
     )
 
 
+# The text GEPA starts from and rewrites (docs/gepa_design.md, D5). Label lists and the
+# reply format are not part of it, so a rewrite can't break parsing.
+SEED_INSTRUCTION = f"""You are classifying a customer support ticket.
+
+Pick exactly one queue, one type and one priority. Pick one or more tags. Use only the values listed below, spelled exactly as written.
+
+Queues:
+{_options(LABELS["queue"], DESCRIPTIONS["queue"])}
+
+Types:
+{_options(LABELS["type"], DESCRIPTIONS["type"])}
+
+Priorities:
+{_options(LABELS["priority"], DESCRIPTIONS["priority"])}"""
+
+
 def _build(subject: str, body: str, descriptions: dict) -> str:
     return f"""You are classifying a customer support ticket.
 

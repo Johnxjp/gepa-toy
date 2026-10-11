@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +9,7 @@ import httpx2
 import openai
 
 from gepa_toy.config import SPLITS_DIR
+from gepa_toy.data_processing.tsv import read_tsv
 from gepa_toy.evaluate import (
     evaluate,
     gepa_score,
@@ -16,7 +18,7 @@ from gepa_toy.evaluate import (
     summarise,
     tag_scores,
 )
-from gepa_toy.model import ModelConfig, parse_prediction
+from gepa_toy.model import ModelConfig, UnexpectedResponseError, parse_prediction
 from gepa_toy.zero_shot import build_prompt
 
 TRAIN = SPLITS_DIR / "train.tsv"
@@ -96,7 +98,7 @@ class SummariseTest(unittest.TestCase):
 class EvaluateTest(unittest.TestCase):
     @patch("gepa_toy.evaluate.classify", return_value=IT_SUPPORT)
     def test_run_has_metadata_predictions_and_results(self, _):
-        run = evaluate(TRAIN, build_prompt, ModelConfig())
+        run = evaluate(TRAIN, build_prompt, ModelConfig(model="m"))
         self.assertEqual(set(run), {"metadata", "predictions", "results"})
         self.assertEqual(
             run["metadata"]["data_file"],
@@ -114,22 +116,14 @@ class EvaluateTest(unittest.TestCase):
         self.assertAlmostEqual(run["results"]["queue"]["accuracy"], 0.1)
 
     @patch("gepa_toy.evaluate.classify")
-    def test_transient_errors_are_recorded(self, classify):
+    def test_api_errors_stop_the_run(self, classify):
+        # Temporary errors too: a run with gaps is not a result (docs/ticket_scoring.md 5).
         for error in (
             openai.APIConnectionError(request=None),
             openai.APITimeoutError(request=None),
             status_error(openai.RateLimitError, 429),
             status_error(openai.InternalServerError, 502),
-        ):
-            classify.side_effect = error
-            first = evaluate(TRAIN, build_prompt, ModelConfig())["predictions"][0]
-            self.assertIsNone(first["predicted"])
-            self.assertEqual(first["gepa_score"], 0.0)
-            self.assertTrue(first["error"].startswith("API error"))
-
-    @patch("gepa_toy.evaluate.classify")
-    def test_setup_errors_stop_the_run(self, classify):
-        for error in (
+            UnexpectedResponseError("<html>Bad gateway</html>"),
             KeyError("OPENROUTER_API_KEY"),
             status_error(openai.BadRequestError, 400),
             status_error(openai.AuthenticationError, 401),
@@ -138,13 +132,27 @@ class EvaluateTest(unittest.TestCase):
         ):
             classify.side_effect = error
             with self.assertRaises(type(error)):
-                evaluate(TRAIN, build_prompt, ModelConfig())
+                evaluate(TRAIN, build_prompt, ModelConfig(model="m"))
+
+    @patch("gepa_toy.evaluate.classify")
+    def test_first_error_cancels_calls_not_yet_started(self, classify):
+        def fail_first(prompt, _):
+            if "Ticket subject: " + read_tsv(TRAIN)[0]["subject"] in prompt:
+                raise status_error(openai.RateLimitError, 429)
+            time.sleep(0.05)
+            return IT_SUPPORT
+
+        classify.side_effect = fail_first
+        with self.assertRaises(openai.RateLimitError):
+            evaluate(TRAIN, build_prompt, ModelConfig(model="m"), workers=2)
+        # 100 tickets; only those already running when the error surfaced may finish.
+        self.assertLess(classify.call_count, 10)
 
     @patch("gepa_toy.evaluate.classify")
     @patch("gepa_toy.evaluate.git_version", side_effect=RuntimeError("no git"))
     def test_metadata_failure_happens_before_any_model_call(self, _, classify):
         with self.assertRaises(RuntimeError):
-            evaluate(TRAIN, build_prompt, ModelConfig())
+            evaluate(TRAIN, build_prompt, ModelConfig(model="m"))
         classify.assert_not_called()
 
     def test_labels_split_tag_groups(self):
@@ -158,7 +166,7 @@ class EvaluateTest(unittest.TestCase):
 
     @patch("gepa_toy.evaluate.classify", return_value=IT_SUPPORT)
     def test_runs_in_the_same_second_get_separate_files(self, _):
-        run = evaluate(TRAIN, build_prompt, ModelConfig())
+        run = evaluate(TRAIN, build_prompt, ModelConfig(model="m"))
         other = {**run, "metadata": {**run["metadata"]}}
         other["metadata"]["started_at"] = run["metadata"]["started_at"].replace(
             run["metadata"]["started_at"][20:26], "999999"
@@ -169,7 +177,7 @@ class EvaluateTest(unittest.TestCase):
 
     @patch("gepa_toy.evaluate.classify", return_value=IT_SUPPORT)
     def test_save_run_round_trips(self, _):
-        run = evaluate(TRAIN, build_prompt, ModelConfig())
+        run = evaluate(TRAIN, build_prompt, ModelConfig(model="m"))
         with tempfile.TemporaryDirectory() as tmp:
             path = save_run(Path(tmp), run)
             self.assertTrue(path.name.endswith("_train.json"))
