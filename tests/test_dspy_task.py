@@ -24,6 +24,8 @@ from dspy.utils.exceptions import (  # isort: skip
     AdapterParseError,
     LMAuthError,
     LMRateLimitError,
+    LMServerError,
+    LMTimeoutError,
 )
 
 
@@ -91,6 +93,17 @@ class ProgramTest(unittest.TestCase):
         with self.assertRaises(LMRateLimitError):
             program(subject="a", body="b")
         self.assertEqual(stops, ["LMRateLimitError: quota"])
+
+    def test_reflection_stop_ignores_transient_errors_but_not_setup_errors(self):
+        # Design 4.5: a transient reflection error is logged and the loop goes on.
+        stops = []
+        stop = StopOnLMError(stops.append, stop_on_transient=False)
+        stop.on_lm_end("id", None, LMServerError("upstream 500"))
+        stop.on_lm_end("id", None, LMTimeoutError("timed out"))
+        stop.on_lm_end("id", None, LMRateLimitError("quota"))
+        self.assertEqual(stops, [])
+        stop.on_lm_end("id", None, LMAuthError("bad key"))
+        self.assertEqual(stops, ["LMAuthError: bad key"])
 
     def test_stop_callback_ignores_successful_calls(self):
         stops = []

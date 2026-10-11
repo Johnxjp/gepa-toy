@@ -55,6 +55,9 @@ class Cache:
         raw = self.get(key)
         if raw is None:
             # The API call runs outside the lock so workers are not serialised.
-            raw = complete(prompt, model_config)
-            self.set(key, raw)
+            self.set(key, complete(prompt, model_config))
+            # Another process may have stored its reply for this key while we waited. The
+            # task model is not deterministic at temperature 0, so return the stored reply,
+            # or parallel runs (and later hits in this one) see different answers.
+            raw = self.get(key)
         return raw

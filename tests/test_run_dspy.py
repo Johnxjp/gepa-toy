@@ -177,6 +177,9 @@ class MainTest(unittest.TestCase):
                 ("paid/model", 500, False),
             ],
         )
+        # A transient reflection error skips a proposal; a task-model one stops the run.
+        self.assertTrue(self.lms[0][1][0].stop_on_transient)
+        self.assertFalse(self.lms[1][1][0].stop_on_transient)
         self.assertTrue(self.lms[1][0].reasoning)
         self.assertEqual(self.lms[1][0].temperature, 1.0)
         (run_file,) = self.results.glob("*.json")

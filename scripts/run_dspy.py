@@ -71,8 +71,12 @@ def main() -> None:
     optimiser = dspy.GEPA(
         metric=metric,
         max_metric_calls=args.budget,
-        # gepa swallows reflection errors and returns the seed, so this LM stops the run too.
-        reflection_lm=make_lm(reflection_config, [StopOnLMError(exit_run)]),
+        # gepa swallows reflection errors, so a bad key or model would burn the budget and
+        # return the seed. Transient ones only skip the proposal: one timeout after
+        # LiteLLM's retries would otherwise kill the run and lose its log.
+        reflection_lm=make_lm(
+            reflection_config, [StopOnLMError(exit_run, stop_on_transient=False)]
+        ),
         reflection_minibatch_size=MINIBATCH_SIZE,
         candidate_selection_strategy="pareto",
         skip_perfect_score=True,

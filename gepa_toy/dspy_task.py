@@ -33,14 +33,21 @@ class StopOnLMError(BaseCallback):
     callback doesn't help: DSPy swallows those too. Hence `on_stop`, which in the
     script exits the process. A reply the model got wrong is not an LM error: it
     surfaces as an `AdapterParseError` and is scored 0 as intended.
+
+    With `stop_on_transient=False`, errors DSPy classes as retryable (timeout, 5xx,
+    429) pass through, so a failed proposal is skipped as in our loop (design 4.5).
     """
 
-    def __init__(self, on_stop: Callable[[str], None]):
+    def __init__(self, on_stop: Callable[[str], None], stop_on_transient: bool = True):
         self.on_stop = on_stop
+        self.stop_on_transient = stop_on_transient
 
     def on_lm_end(self, call_id, outputs, exception=None):
-        if exception is not None:
-            self.on_stop(f"{type(exception).__name__}: {exception}")
+        if exception is None:
+            return
+        if not self.stop_on_transient and is_retryable_lm_error(exception):
+            return
+        self.on_stop(f"{type(exception).__name__}: {exception}")
 
 
 def exit_run(reason: str) -> None:

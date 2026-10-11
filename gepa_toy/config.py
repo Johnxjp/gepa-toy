@@ -19,6 +19,6 @@ LABELS = json.loads(LABELS_JSON.read_text())
 DUPLICATE_CUTOFF = 0.45
 
 GEPA_RESULTS_DIR = RESULTS_DIR / "gepa"
-# The leading ~ is OpenRouter's alias for the newest model in the family; the resolved
-# model name is in each reply, so check it in the logs if results shift between runs.
+# The leading ~ is OpenRouter's alias for the newest model in the family. The resolved
+# model is not logged: if OpenRouter repoints the alias, runs before and after differ.
 REFLECTION_MODEL = "~deepseek/deepseek-flash-latest"

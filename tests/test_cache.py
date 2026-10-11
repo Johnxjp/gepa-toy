@@ -114,6 +114,20 @@ class CacheTest(unittest.TestCase):
         self.assertEqual(results, ["reply"] * 64)
         self.assertEqual(row_count(self.path), 1)
 
+    def test_racing_miss_returns_the_stored_reply(self):
+        # Another process stores its reply while this call waits on the API. The task
+        # model is not deterministic at temperature 0, so the two replies can differ;
+        # every caller must get the stored one or parallel stage 0 runs disagree.
+        other = Cache(self.path)
+
+        def slow_complete(prompt, model_config):
+            other.complete(prompt, model_config, lambda p, c: "stored first")
+            return "arrived second"
+
+        self.assertEqual(
+            self.cache.complete(PROMPT, CONFIG, slow_complete), "stored first"
+        )
+
     def test_reopen_sees_stored_row(self):
         self.cache.complete(PROMPT, CONFIG, CountingComplete())
         fake = CountingComplete()
