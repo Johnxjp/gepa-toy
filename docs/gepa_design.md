@@ -55,7 +55,7 @@ evaluate.save_run()            one JSON file under results/ with git commit,
 | Task-model call | `model.classify` | OpenRouter, timeout 60s, reasoning off |
 | Strict reply parsing | `model.parse_prediction` | Failure keeps `error` and `raw` |
 | Per-ticket score | `evaluate.gepa_score` | 0 to 1, mean of queue, type, priority, tag F1 |
-| Transient vs fatal API errors | `evaluate.predict` | Transient errors score 0, setup errors crash |
+| API errors stop the run | `evaluate.predict`, `dspy_task.StopOnLMError` | Only model mistakes (format, invalid label, truncation) score 0 |
 | Run summary | `evaluate.summarise` | Accuracy and macro P/R/F1 per field |
 | Run file with provenance | `evaluate.save_run` | Git commit, dirty flag, model, prompt template |
 | Baseline prompts | `zero_shot.build_prompt`, `build_expanded_prompt` | Instruction text is fixed inside the template |
@@ -183,7 +183,7 @@ Changes to existing modules:
 
 - `zero_shot.build(instruction, subject, body)`: the instruction goes at the top; the label lists, the ticket and the JSON format stay fixed below it. Insert the instruction by concatenation, not `str.format` or an f-string field, so braces written by the reflector can't break the template. `build_prompt` becomes `build(PLAIN_INSTRUCTION, ...)` and must return the same string as today. `SEED_INSTRUCTION` is the D5 seed.
 - `evaluate.evaluate_rows(rows, build, model_config, workers) -> list[dict]` holds the thread pool. The file-based `evaluate()` calls it, so `scripts/evaluate.py` keeps working.
-- `model.complete(prompt, model_config) -> str` is the API call and response-shape check split out of `classify`. The reflector uses it with its own `ModelConfig`. A bad response shape raises a transient error so the task records it as a failed prediction, as now.
+- `model.complete(prompt, model_config) -> str` is the API call and response-shape check split out of `classify`. The reflector uses it with its own `ModelConfig`. A bad response shape raises `UnexpectedResponseError` and stops the run, as `classify` does now.
 - `evaluate.summarise` gains `queue_confusion`: rows are true queues, columns are predicted queues plus `(none)`, labels in `LABELS["queue"]` order.
 - `scripts/run_gepa.py --stage {1,2,3,3c} --seed N` maps the stage to `feedback`, `selection` and reflection prompt, runs GEPA, saves the log under `config.GEPA_RESULTS_DIR`, then scores the best candidate on test with the existing evaluate and `save_run`.
 - `scripts/summarise_runs.py` groups test runs by stage and prints mean and sample standard deviation of queue accuracy and `gepa_score`, with n per stage.
@@ -256,11 +256,10 @@ A parse failure replaces the `Predicted` line with one line, such as `Reply was 
 
 | Dependency | How it fails | Behaviour |
 | --- | --- | --- |
-| Task model (OpenRouter) | Transient error, timeout, 429 that outlasts the SDK retries | Prediction recorded as failed, scores 0, not cached. Many of these in a log mean the run is thrown away, not reported. |
-| Task model | Setup error (bad key, unknown model) | Crash, as today. |
+| Task model (OpenRouter) | Any API error after the library's retries: timeout, 429, 5xx, bad key, no credit, unknown model, reply with no usable choices | Stop the run ([ticket_scoring.md](ticket_scoring.md) section 5). Not cached. |
 | Task model | Reply parses badly | Scored 0, raw reply cached: at temperature 0 it is the model's real answer. |
 | Reflection model | Reply has no fenced block | Reflector raises. Iteration logged as "proposal failed", loop continues. The parent's minibatch calls are already spent. A reflector that keeps failing shows up in the log, and the budget still ends the run. |
-| Reflection model | Transient error | Same as above: logged, loop continues. |
+| Reflection model | Any API error, or an empty reply | Our loop: logged as "proposal failed", loop continues. Reflection produces no scores, so a failure leaves no gap in them; in the first real run 9 of 25 replies were unusable, and stopping would have ended it. Stage 4: stops the run (`StopOnLMError`). |
 | Budget | Lands mid-iteration or mid-pareto-scoring | The core never starts an evaluation it can't afford. An accepted child with no budget left to score it ends the run with "out of budget". |
 | Parent | Scores 1 on every minibatch example | No reflection call, iteration logged as skipped. |
 | Cache | Two workers write the same key | Lock on the single connection: no exception, one stored row. |
@@ -281,7 +280,7 @@ A parse failure replaces the `Predicted` line with one line, such as `Reply was 
 
 ## 6. Cross-cutting concerns
 
-**Cost and rate limits.** Each stage is 3 runs of 1,000 calls plus 300 test calls: about 16,000 task-model calls across stages 0 to 4, before cache savings. OpenRouter limits free models per minute and per day. Check the current limits for the account before the first full run, and size `workers` to stay under the per-minute limit. A 429 that outlasts the SDK retries is recorded as a failed prediction, which would quietly lower scores.
+**Cost and rate limits.** Each stage is 3 runs of 1,000 calls plus 300 test calls: about 16,000 task-model calls across stages 0 to 4, before cache savings. OpenRouter limits free models per minute and per day. Check the current limits for the account before the first full run, and size `workers` to stay under the per-minute limit. A 429 that outlasts the SDK retries stops the run, so the daily cap must cover the run's calls, including retries and DSPy's adapter fallbacks.
 
 **Performance.** `evaluate_rows` keeps the existing thread pool. The cache means a parent rescored on the same tickets costs no API calls, though it still costs budget.
 
@@ -343,7 +342,7 @@ Success for the whole project is the README's "done means" list: a results table
 
 ### Rollback
 
-A run whose log shows many API errors is discarded and rerun, not reported. Because the log is rewritten every iteration and the cache keeps every real reply, a rerun after a crash or a rate-limit storm repeats only the calls that never completed. The old `build_expanded_prompt` baseline is rerun rather than kept.
+An API error stops the run, so no saved run contains one. Because the log is rewritten every iteration and the cache keeps every real reply, a rerun after a crash or a rate-limit storm repeats only the calls that never completed. The old `build_expanded_prompt` baseline is rerun rather than kept.
 
 ### Unit checks, stages 0 to 3c
 

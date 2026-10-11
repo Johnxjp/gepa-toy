@@ -39,7 +39,7 @@ def main() -> None:
     parser.add_argument("--stage", required=True, choices=["0", *STAGES])
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--budget", type=int, default=1000)
-    parser.add_argument("--model", default=ModelConfig().model)
+    parser.add_argument("--model", default=config.TASK_MODEL)
     parser.add_argument("--reflection-model", default=config.REFLECTION_MODEL)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
@@ -53,7 +53,7 @@ def main() -> None:
         task = TicketTask(task_config, stage["feedback"], cache, args.workers)
         # A bad reflection model or key must crash here: inside the loop every proposal
         # failure is logged and the loop carries on until the task budget is spent.
-        model.complete("Reply with OK.", reflection_config)
+        model.complete("Reply with OK.", reflection_config)  # Flight test
         propose = make_reflector(
             lambda prompt: model.complete(prompt, reflection_config),
             REFLECTION_PROMPTS[stage["reflection_prompt"]],

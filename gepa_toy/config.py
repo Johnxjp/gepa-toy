@@ -12,13 +12,16 @@ LABELS_JSON = DATA_DIR / "labels.json"
 SPLITS_DIR = DATA_DIR / "splits"
 RESULTS_DIR = PROJECT_ROOT / "results"
 CACHE_PATH = RESULTS_DIR / "cache.sqlite"
+GEPA_RESULTS_DIR = RESULTS_DIR / "gepa"
 
 LABELS = json.loads(LABELS_JSON.read_text())
 
-# Chosen in docs/dataset_preparation.md; lower values chain clusters together.
-DUPLICATE_CUTOFF = 0.45
-
-GEPA_RESULTS_DIR = RESULTS_DIR / "gepa"
+# The only place models are named, so every run records exactly what it used. A free
+# model past its daily quota fails the run on its first call.
+TASK_MODEL = "nvidia/nemotron-3.5-lightning"
 # The leading ~ is OpenRouter's alias for the newest model in the family. The resolved
 # model is not logged: if OpenRouter repoints the alias, runs before and after differ.
 REFLECTION_MODEL = "~deepseek/deepseek-flash-latest"
+
+# Chosen in docs/dataset_preparation.md; lower values chain clusters together.
+DUPLICATE_CUTOFF = 0.45

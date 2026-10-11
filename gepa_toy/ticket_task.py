@@ -4,45 +4,12 @@ from typing import Literal
 
 from gepa_toy import model, zero_shot
 from gepa_toy.cache import Cache
-from gepa_toy.evaluate import SINGLE_FIELDS, evaluate_rows, gepa_score, tag_scores
+from gepa_toy.evaluate import evaluate_rows
+from gepa_toy.feedback import prediction_line, score_feedback, written_feedback
 from gepa_toy.gepa import Rollout
 from gepa_toy.model import ModelConfig
 
 FeedbackMode = Literal["written", "score"]
-
-
-def labels_line(labels: dict) -> str:
-    fields = ", ".join(f"{field} {labels[field]}" for field in SINGLE_FIELDS)
-    return f"{fields}, tags [{', '.join(labels['tags'])}]"
-
-
-def predicted_line(predicted: dict | None, error: str | None) -> str:
-    if predicted is None:
-        # Pydantic errors span several lines; collapsed so the reflector sees one per ticket.
-        return f"Reply was not valid: {' '.join(error.split())}"
-    return f"Predicted: {labels_line(predicted)}"
-
-
-def feedback(
-    predicted: dict | None, labels: dict, error: str | None, mode: FeedbackMode
-) -> str:
-    score = f"Score: {gepa_score(predicted, labels):.2f}"
-    if mode == "score":
-        return score
-    if predicted is None:
-        matches = [0] * len(SINGLE_FIELDS)
-        f1 = 0.0
-    else:
-        matches = [int(predicted[f] == labels[f]) for f in SINGLE_FIELDS]
-        f1 = tag_scores(predicted["tags"], labels["tags"])["f1"]
-    parts = ", ".join(f"{f} {m}" for f, m in zip(SINGLE_FIELDS, matches, strict=True))
-    return "\n".join(
-        [
-            f"{score} ({parts}, tags F1 {f1:.2f})",
-            predicted_line(predicted, error),
-            f"Correct:   {labels_line(labels)}",
-        ]
-    )
 
 
 class TicketTask:
@@ -75,10 +42,14 @@ class TicketTask:
                 # Same empty-subject placeholder as the prompt, so the reflector sees what the model saw.
                 trace=(
                     f"Subject: {row['subject'] or '(no subject)'}\nBody:\n{row['body']}\n"
-                    + predicted_line(record["predicted"], record["error"])
+                    + prediction_line(record["predicted"], record["error"])
                 ),
-                feedback=feedback(
-                    record["predicted"], record["labels"], record["error"], self.mode
+                feedback=(
+                    score_feedback(record["predicted"], record["labels"])
+                    if self.mode == "score"
+                    else written_feedback(
+                        record["predicted"], record["labels"], record["error"]
+                    )
                 ),
                 record=record,
             )

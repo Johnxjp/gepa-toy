@@ -1,11 +1,10 @@
-"""Stage 4: the ticket classifier as a DSPy program for `dspy.GEPA`.
-
-See docs/gepa_design.md section 4.3 ("DSPy") and decision D2.
-"""
+"""Stage 4: the ticket classifier as a DSPy program, for `dspy.GEPA` (docs/gepa_design.md, part 3)."""
 
 import os
 import sys
+import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal
 
 # isort: off
@@ -14,47 +13,113 @@ from typing import Literal
 import openai  # noqa: F401
 import dspy
 from dspy.utils.callback import BaseCallback
-from dspy.utils.exceptions import AdapterParseError, LMError, is_retryable_lm_error
+from dspy.utils.exceptions import AdapterParseError
 # isort: on
 
 from gepa_toy.config import LABELS
 from gepa_toy.evaluate import gepa_score, labels_of
+from gepa_toy.feedback import written_feedback
 from gepa_toy.model import ModelConfig
-from gepa_toy.ticket_task import feedback
 from gepa_toy.zero_shot import SEED_INSTRUCTION
+
+# No JSON-mode retry when a reply doesn't parse: it would be an extra call the budget
+# doesn't count, its strict schema would give invalid labels a second chance that our
+# stage 2 doesn't get, and a provider rejecting the schema would stop the run.
+dspy.configure(adapter=dspy.ChatAdapter(use_json_adapter_fallback=False))
 
 
 class StopOnLMError(BaseCallback):
     """Stops the run on the first model call that fails after DSPy's retries.
 
-    Inside `compile`, DSPy catches every error from the program, scores the example
-    0 and carries on, so a bad key or an exhausted quota burns the whole budget and
-    returns the seed as "best" with nothing in the log to show for it. Raising from a
-    callback doesn't help: DSPy swallows those too. Hence `on_stop`, which in the
-    script exits the process. A reply the model got wrong is not an LM error: it
-    surfaces as an `AdapterParseError` and is scored 0 as intended.
+    Inside `compile`, DSPy catches every error and scores the example 0 (or skips the
+    proposal), so the run carries on with fake zeros. Raising from here doesn't help:
+    DSPy swallows exceptions from callbacks too. Hence `on_stop` exits the process.
+    GEPA checkpoints at the start of each cycle, so the saved state never holds the
+    failed cycle and `--resume` reruns it cleanly.
 
-    With `stop_on_transient=False`, errors DSPy classes as retryable (timeout, 5xx,
-    429) pass through, so a failed proposal is skipped as in our loop (design 4.5).
+    A reply the model got wrong (bad format, cut off part-way) is not an LM error: it
+    surfaces later as an `AdapterParseError` and is scored 0 as intended. An empty reply
+    is an API failure: OpenRouter sends one with status 200 when the provider fails, and
+    a reflection model that spends its whole token limit thinking returns one too.
     """
 
-    def __init__(self, on_stop: Callable[[str], None], stop_on_transient: bool = True):
+    def __init__(self, on_stop: Callable[[str], None]):
         self.on_stop = on_stop
-        self.stop_on_transient = stop_on_transient
 
     def on_lm_end(self, call_id, outputs, exception=None):
-        if exception is None:
-            return
-        if not self.stop_on_transient and is_retryable_lm_error(exception):
-            return
-        self.on_stop(f"{type(exception).__name__}: {exception}")
+        if exception is not None:
+            self.on_stop(f"{type(exception).__name__}: {exception}")
+        elif not outputs:
+            self.on_stop("model reply had no choices")
+        elif not all(_text(output) for output in outputs):
+            self.on_stop("model reply was empty")
 
 
-def exit_run(reason: str) -> None:
-    print(f"Stopping run: {reason}", file=sys.stderr, flush=True)
-    # os._exit, not sys.exit: this runs in a worker thread, and the main thread
-    # would otherwise finish the iteration with zeros and save it as a result.
-    os._exit(1)
+def _text(output: str | dict | None) -> str | None:
+    # Reasoning models give {"text": ..., "reasoning_content": ...}; others a plain string.
+    return output.get("text") if isinstance(output, dict) else output
+
+
+class SharedLM(dspy.LM):
+    """An LM that every copy of a program shares.
+
+    GEPA deep-copies the program for each candidate, which would copy the LM and its
+    call history too, leaving the original's history empty and the run's task-model
+    usage unrecorded.
+    """
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def exit_run(stop_file: Path) -> Callable[[str], None]:
+    def stop(reason: str) -> None:
+        stop_file.write_text(reason + "\n")
+        print(f"Stopping run: {reason}", file=sys.stderr, flush=True)
+        # os._exit, not sys.exit: this runs in a worker thread and must not let GEPA
+        # finish the cycle or save state.
+        os._exit(1)
+
+    return stop
+
+
+class ProgressLog:
+    """One line per GEPA cycle with calls used and an ETA, to stdout and `log_file`.
+
+    DSPy's own progress bar has an ETA too, but it is buried among the bars printed
+    for every batch it scores. The ETA covers the rest of the budget plus `eval_calls`
+    for final scoring, at the call rate seen since the first cycle of this process.
+    """
+
+    def __init__(
+        self, budget: int, eval_calls: int, log_file: Path, clock=time.monotonic
+    ):
+        self.budget, self.eval_calls, self.log_file, self.clock = (
+            budget,
+            eval_calls,
+            log_file,
+            clock,
+        )
+        self.first = None
+
+    def on_iteration_end(self, event) -> None:
+        state, now = event["state"], self.clock()
+        calls = state.total_num_evals
+        if self.first is None:
+            self.first = (now, calls)
+        started, first_calls = self.first
+        rate = (calls - first_calls) / (now - started) if now > started else 0
+        remaining = max(self.budget - calls, 0) + self.eval_calls
+        eta = f"{remaining / rate / 60:.0f} min" if rate else "?"
+        line = (
+            f"cycle {event['iteration']} | calls {calls}/{self.budget} | "
+            f"{'accepted' if event['proposal_accepted'] else 'rejected'} | "
+            f"candidates {len(state.program_candidates)} | "
+            f"best pareto {max(state.program_full_scores_val_set):.3f} | eta {eta}"
+        )
+        print(line, flush=True)
+        with self.log_file.open("a") as f:
+            f.write(line + "\n")
 
 
 class ClassifyTicket(dspy.Signature):
@@ -73,10 +138,8 @@ def build_program(lm: dspy.LM) -> dspy.Predict:
     return program
 
 
-def make_lm(
-    model_config: ModelConfig, callbacks: list[BaseCallback] | None = None
-) -> dspy.LM:
-    return dspy.LM(
+def make_lm(model_config: ModelConfig, callbacks: list[BaseCallback]) -> SharedLM:
+    return SharedLM(
         f"openrouter/{model_config.model}",
         temperature=model_config.temperature,
         max_tokens=model_config.max_tokens,
@@ -111,7 +174,7 @@ def metric(gold, pred, trace=None, pred_name=None, pred_trace=None) -> dspy.Pred
     predicted = prediction_dict(pred)
     return dspy.Prediction(
         score=gepa_score(predicted, gold.true_labels),
-        feedback=feedback(predicted, gold.true_labels, None, "written"),
+        feedback=written_feedback(predicted, gold.true_labels, None),
     )
 
 
@@ -123,12 +186,6 @@ def predict_row(program: dspy.Module, row: dict[str, str]) -> dict:
         predicted = prediction_dict(program(**example.inputs()))
     except AdapterParseError as e:
         error, raw = str(e), e.lm_response
-    except LMError as e:
-        # Same policy as evaluate.predict: still failing after DSPy's retries is
-        # recorded, a setup error (bad key, unknown model) must crash.
-        if not is_retryable_lm_error(e):
-            raise
-        error = f"API error: {e}"
     return {
         "id": row["id"],
         "predicted": predicted,
@@ -140,31 +197,30 @@ def predict_row(program: dspy.Module, row: dict[str, str]) -> dict:
     }
 
 
-def candidate_log(results) -> dict:
+def candidate_log(results, pareto_ids: list[str]) -> dict:
     """Lineage from `detailed_results`, in the shape our own GEPA log uses.
 
-    DSPy keys pareto scores and wins by position in the valset, as we do.
+    DSPy keys pareto scores by position in the valset; `pareto_ids` maps those back to tickets.
     """
     return {
+        "pareto_ids": pareto_ids,
+        "best": results.best_idx,
+        "total_metric_calls": results.total_metric_calls,
+        "num_full_val_evals": results.num_full_val_evals,
         "candidates": [
             {
                 "id": i,
-                "text": candidate.predictors()[0].signature.instructions,
-                # One parent per candidate with merge off (D3); DSPy stores a list.
-                "parent": results.parents[i][0],
-                "pareto_scores": [scores[j] for j in sorted(scores)],
+                "instruction": candidate.predictors()[0].signature.instructions,
+                "parents": results.parents[i],
                 "mean_pareto_score": results.val_aggregate_scores[i],
-                "pareto_wins": sorted(
-                    j
-                    for j, winners in results.per_val_instance_best_candidates.items()
+                "pareto_scores": results.val_subscores[i],
+                "examples_won": sorted(
+                    key
+                    for key, winners in results.per_val_instance_best_candidates.items()
                     if i in winners
                 ),
                 "calls_when_found": results.discovery_eval_counts[i],
             }
-            for i, (candidate, scores) in enumerate(
-                zip(results.candidates, results.val_subscores, strict=True)
-            )
+            for i, candidate in enumerate(results.candidates)
         ],
-        "best": results.best_idx,
-        "calls_used": results.total_metric_calls,
     }

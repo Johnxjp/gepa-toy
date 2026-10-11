@@ -2,6 +2,8 @@
 
 Learn GEPA's mechanics by implementing it from scratch on a small, cheap task with a clean metric, then compare with DSPy's implementation.
 
+**Status:** stopped after stage 4. The labels are too arbitrary for stage comparisons to be measurable; see [docs/observations.md](docs/observations.md).
+
 This is a learning exercise, not a showcase. A classifier is the easy case for GEPA: one prompt, thin feedback. The real test comes later, on playbook extraction in mini-Edra.
 
 ## Task

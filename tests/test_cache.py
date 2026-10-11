@@ -10,7 +10,7 @@ from gepa_toy.cache import Cache
 from gepa_toy.model import ModelConfig
 
 PROMPT = "Classify this ticket."
-CONFIG = ModelConfig()
+CONFIG = ModelConfig(model="m")
 
 
 class CountingComplete:

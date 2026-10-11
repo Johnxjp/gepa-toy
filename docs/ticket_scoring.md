@@ -41,11 +41,13 @@ uv run python -m scripts.evaluate --split pareto --model openai/gpt-4.1-mini --m
 
 **Why:** the reflector needs to see what went wrong to propose a fix. `error` is currently pydantic's full message, which is long. The written-feedback step should turn it into one line (for example "queue '<queue>' is not an allowed value; missing type, priority, tags") and leave the full message in the saved run.
 
-## 5. Record only temporary API failures
+## 5. Any API failure stops the run
 
-**Decision:** connection errors, timeouts, rate limits (429) and server errors (5xx) that still fail after the SDK's two retries are recorded as a failed prediction. Any other error stops the run, including a bad request (400), a bad key (401), a blocked model (403), an unknown model (404) and a missing API key. A reply with the wrong shape (no `choices`, an HTML page, a `null` body) is recorded as `"unexpected response shape"`.
+**Decision:** an API error that still fails after the library's own retries stops the run. That covers connection errors, timeouts, rate limits (429), server errors (5xx), a bad request (400), a bad key (401), no credit (402), a blocked model (403), an unknown model (404), a missing API key, and a reply with the wrong shape (no `choices`, an HTML page, a `null` body). Only a reply the model got wrong is recorded and scored 0: bad formatting, an invalid label, or a reply cut off by the token limit. A better instruction can fix those; it can't fix an API failure.
 
-**Why:** one flaky call shouldn't sink a run of hundreds of tickets. A setup mistake must stop the run: otherwise every ticket scores 0 and the saved run looks like a real result. A GEPA loop would then score every candidate 0 and keep going.
+**Why:** a run with gaps is not a result. A recorded API failure scores 0 and looks like a model mistake. In a GEPA loop it does worse: candidates are accepted or rejected on those zeros. On 2026-10-09 a stage 4 run hit OpenRouter's daily free-model limit 30 minutes in, and DSPy scored every refused call 0 for 77 iterations.
+
+**How:** `evaluate.py` lets the error propagate and cancels the tickets not yet started. DSPy catches errors inside its own loop, so the stage 4 script attaches a callback (`StopOnLMError`) that exits the process on the first failed call. GEPA checkpoints at the start of each cycle, so `--resume` continues from a state with no failed calls in it. Tests in `tests/test_dspy_integration.py` send each failure through DSPy's real call path against a fake OpenRouter.
 
 **Also:** each call has a 60-second timeout. The SDK default of 600 seconds, tried three times, meant one hung call could hold a worker for 30 minutes.
 

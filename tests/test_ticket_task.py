@@ -6,11 +6,11 @@ from unittest.mock import patch
 import openai
 
 from gepa_toy.cache import Cache
-from gepa_toy.config import LABELS as ALL_LABELS
-from gepa_toy.evaluate import gepa_score, labels_of
+from gepa_toy.evaluate import labels_of
+from gepa_toy.feedback import written_feedback
 from gepa_toy.gepa import Rollout
-from gepa_toy.model import ModelConfig, parse_prediction
-from gepa_toy.ticket_task import TicketTask, feedback
+from gepa_toy.model import ModelConfig
+from gepa_toy.ticket_task import TicketTask
 from gepa_toy.zero_shot import build
 
 LABELS = {
@@ -19,68 +19,6 @@ LABELS = {
     "priority": "high",
     "tags": ["Security", "Outages & Recovery"],
 }
-CORRECT = (
-    "Correct:   queue Technical Support, type Incident, priority high,"
-    " tags [Security, Outages & Recovery]"
-)
-# (name, predicted, error, expected written feedback)
-CASES = [
-    (
-        "all right",
-        LABELS,
-        None,
-        "Score: 1.00 (queue 1, type 1, priority 1, tags F1 1.00)\n"
-        "Predicted: queue Technical Support, type Incident, priority high,"
-        " tags [Security, Outages & Recovery]\n" + CORRECT,
-    ),
-    (
-        "queue wrong",
-        {**LABELS, "queue": "IT Support"},
-        None,
-        "Score: 0.75 (queue 0, type 1, priority 1, tags F1 1.00)\n"
-        "Predicted: queue IT Support, type Incident, priority high,"
-        " tags [Security, Outages & Recovery]\n" + CORRECT,
-    ),
-    (
-        "type wrong",
-        {**LABELS, "type": "Problem"},
-        None,
-        "Score: 0.75 (queue 1, type 0, priority 1, tags F1 1.00)\n"
-        "Predicted: queue Technical Support, type Problem, priority high,"
-        " tags [Security, Outages & Recovery]\n" + CORRECT,
-    ),
-    (
-        "priority wrong",
-        {**LABELS, "priority": "low"},
-        None,
-        "Score: 0.75 (queue 1, type 1, priority 0, tags F1 1.00)\n"
-        "Predicted: queue Technical Support, type Incident, priority low,"
-        " tags [Security, Outages & Recovery]\n" + CORRECT,
-    ),
-    (
-        "tags missed",
-        {**LABELS, "tags": ["Security"]},
-        None,
-        "Score: 0.92 (queue 1, type 1, priority 1, tags F1 0.67)\n"
-        "Predicted: queue Technical Support, type Incident, priority high,"
-        " tags [Security]\n" + CORRECT,
-    ),
-    (
-        "tags extra",
-        {**LABELS, "tags": ["Security", "Outages & Recovery", "HR"]},
-        None,
-        "Score: 0.95 (queue 1, type 1, priority 1, tags F1 0.80)\n"
-        "Predicted: queue Technical Support, type Incident, priority high,"
-        " tags [Security, Outages & Recovery, HR]\n" + CORRECT,
-    ),
-    (
-        "parse failure",
-        None,
-        "no JSON object in response",
-        "Score: 0.00 (queue 0, type 0, priority 0, tags F1 0.00)\n"
-        "Reply was not valid: no JSON object in response\n" + CORRECT,
-    ),
-]
 
 ROWS = [
     {
@@ -118,40 +56,6 @@ REPLY = (
 CANDIDATE = "Classify carefully. Outages are always high priority."
 
 
-class FeedbackTest(unittest.TestCase):
-    def test_written_cases(self):
-        for name, predicted, error, expected in CASES:
-            with self.subTest(name):
-                self.assertEqual(
-                    feedback(predicted, LABELS, error, "written"), expected
-                )
-
-    def test_written_score_line_matches_gepa_score(self):
-        for name, predicted, error, _ in CASES:
-            with self.subTest(name):
-                first = feedback(predicted, LABELS, error, "written").splitlines()[0]
-                self.assertTrue(
-                    first.startswith(f"Score: {gepa_score(predicted, LABELS):.2f} (")
-                )
-
-    def test_score_mode_is_the_score_alone(self):
-        words = {"Predicted", "Correct", *(v for vs in ALL_LABELS.values() for v in vs)}
-        for name, predicted, error, _ in CASES:
-            with self.subTest(name):
-                text = feedback(predicted, LABELS, error, "score")
-                self.assertEqual(text, f"Score: {gepa_score(predicted, LABELS):.2f}")
-                for word in words:
-                    self.assertNotIn(word, text)
-
-    def test_multiline_validation_error_becomes_one_line(self):
-        error = parse_prediction(REPLY.replace("Technical Support", "Tech")).error
-        self.assertGreater(len(error.splitlines()), 1)
-        text = feedback(None, LABELS, error, "written")
-        self.assertEqual(len(text.splitlines()), 3)
-        self.assertIn("Reply was not valid: 1 validation error", text)
-        self.assertIn("input_value='Tech'", text)
-
-
 class TicketTaskTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -184,7 +88,10 @@ class TicketTaskTest(unittest.TestCase):
         )
         self.assertEqual(rollouts[0].score, 1.0)
         self.assertEqual(rollouts[1].score, 0.0)
-        self.assertEqual(rollouts[0].feedback, CASES[0][3])
+        self.assertEqual(
+            rollouts[0].feedback,
+            written_feedback(rollouts[0].record["predicted"], labels_of(ROWS[0]), None),
+        )
         self.assertEqual(
             rollouts[0].trace,
             "Subject: Server down\n"
@@ -204,14 +111,10 @@ class TicketTaskTest(unittest.TestCase):
         self.assertEqual(len(complete.call_args_list), 6)
 
     @patch("gepa_toy.model.complete")
-    def test_transient_error_scores_zero_and_is_retried(self, complete):
+    def test_api_error_stops_and_is_not_cached(self, complete):
         complete.side_effect = openai.APIConnectionError(request=None)
-        [rollout] = self.task.evaluate(CANDIDATE, ROWS[:1])
-        self.assertEqual(rollout.score, 0.0)
-        self.assertIsNone(rollout.record["predicted"])
-        self.assertIn("Reply was not valid: API error", rollout.feedback)
-        self.assertEqual(len(rollout.feedback.splitlines()), 3)
-        self.assertIn("\nReply was not valid: API error", rollout.trace)
+        with self.assertRaises(openai.APIConnectionError):
+            self.task.evaluate(CANDIDATE, ROWS[:1])
         complete.side_effect = None
         complete.return_value = REPLY
         [retried] = self.task.evaluate(CANDIDATE, ROWS[:1])
@@ -229,7 +132,7 @@ class TicketTaskTest(unittest.TestCase):
 
     @patch("gepa_toy.model.complete", return_value=REPLY)
     def test_score_mode_feedback(self, _):
-        task = TicketTask(ModelConfig(), "score", self.cache)
+        task = TicketTask(ModelConfig(model="m"), "score", self.cache)
         rollouts = task.evaluate(CANDIDATE, ROWS[:2])
         self.assertEqual([r.feedback for r in rollouts], ["Score: 1.00", "Score: 0.00"])
         # The trace still carries the prediction, so the reflector has something to read.
@@ -243,7 +146,9 @@ class TicketTaskTest(unittest.TestCase):
         )
         self.assertEqual(self.task.describe()["model"]["model"], "test/model")
         self.assertEqual(
-            TicketTask(ModelConfig(), "score", self.cache).describe()["feedback"],
+            TicketTask(ModelConfig(model="m"), "score", self.cache).describe()[
+                "feedback"
+            ],
             "score",
         )
 
