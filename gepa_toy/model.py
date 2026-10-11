@@ -16,13 +16,22 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class ModelConfig(BaseModel):
-    model: str = "nvidia/nemotron-3.5-lightning:free"
+    # Paid, not :free: the free tier allows 1,000 calls a day, less than one stage run.
+    model: str = "nvidia/nemotron-3.5-lightning"
     temperature: float = 0.0
-    max_tokens: int = 300
+    max_tokens: int = 1000
     # Off for the task model: on, Nemotron spends ~1,300 tokens and ~40s per ticket thinking.
     reasoning: bool = False
     # The SDK default is 600s, retried twice: one hung call could stall a worker for 30 minutes.
     timeout: float = 60.0
+
+
+def reflection_config(model: str = config.REFLECTION_MODEL) -> ModelConfig:
+    # Reasoning used 4,800 to 7,300 tokens on a real reflection prompt; 16,000 leaves room
+    # for the instruction itself. Temperature 1 so seeds explore different rewrites.
+    return ModelConfig(
+        model=model, temperature=1.0, max_tokens=16000, reasoning=True, timeout=300.0
+    )
 
 
 class Prediction(BaseModel):

@@ -173,11 +173,12 @@ class MainTest(unittest.TestCase):
             models,
             [
                 ("paid/model", 500, True),
-                ("x/y", 4000, True),
+                ("x/y", 16000, True),
                 ("paid/model", 500, False),
             ],
         )
-        self.assertFalse(self.lms[1][0].reasoning)
+        self.assertTrue(self.lms[1][0].reasoning)
+        self.assertEqual(self.lms[1][0].temperature, 1.0)
         (run_file,) = self.results.glob("*.json")
         self.assertEqual(
             json.loads(run_file.read_text())["metadata"]["model"]["model"], "paid/model"

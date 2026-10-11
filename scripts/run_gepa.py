@@ -49,11 +49,7 @@ def main() -> None:
     best_text, best_id, log_path = SEED_INSTRUCTION, None, None
     if args.stage != "0":
         stage = STAGES[args.stage]
-        # Reasoning off: with it on, DeepSeek spends its whole token budget thinking and
-        # returns no content (even at 16k tokens).
-        reflection_config = ModelConfig(
-            model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=120
-        )
+        reflection_config = model.reflection_config(args.reflection_model)
         task = TicketTask(task_config, stage["feedback"], cache, args.workers)
         # A bad reflection model or key must crash here: inside the loop every proposal
         # failure is logged and the loop carries on until the task budget is spent.

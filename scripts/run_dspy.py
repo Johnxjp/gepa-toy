@@ -29,6 +29,7 @@ from gepa_toy.dspy_task import (
 )
 from gepa_toy.evaluate import save_run, summarise
 from gepa_toy.model import ModelConfig
+from gepa_toy.model import reflection_config as reflection_config_for
 from gepa_toy.utils import git_version
 
 MINIBATCH_SIZE = 5
@@ -47,11 +48,7 @@ def main() -> None:
     args = parser.parse_args()
 
     task_config = ModelConfig(model=args.model, max_tokens=args.max_tokens)
-    # Reasoning off: with it on, DeepSeek spends its whole token budget thinking and returns
-    # no content (even at 16k tokens). Room to write a whole instruction; 60s would cut it short.
-    reflection_config = ModelConfig(
-        model=args.reflection_model, reasoning=False, max_tokens=4000, timeout=120.0
-    )
+    reflection_config = reflection_config_for(args.reflection_model)
     started_at = datetime.now(UTC)
     stem = f"{started_at:%Y%m%d-%H%M%S-%f}_stage4_seed{args.seed}"
     log_path = GEPA_RESULTS_DIR / f"{stem}.json"
